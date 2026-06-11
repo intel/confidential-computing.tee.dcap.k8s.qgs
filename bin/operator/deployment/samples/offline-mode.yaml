@@ -1,0 +1,29 @@
+# Example: TdxQuoteGenerationService with Offline Platform Registration
+#
+# This example demonstrates deploying the TDX Quote Generation Service
+# for air-gapped environments where certificates are manually provisioned.
+#
+# In Offline mode:
+# - No registrar Deployment is created
+# - Certificates must be pre-created as Kubernetes secrets
+# - Secrets should be labeled with fmspc=<value> for discovery
+#
+# Prerequisites:
+# 1. Manually create PCK certificate secrets (see documentation)
+# 2. Ensure nodes are labeled with SGX capability:
+#    kubectl label nodes <node-name> intel.feature.node.kubernetes.io/sgx=true
+#
+# Apply with: kubectl apply -f offline-mode.yaml
+
+apiVersion: trustedservices.intel.com/v1
+kind: TdxQuoteGenerationService
+metadata:
+  name: intel-tdx-dcap
+  labels:
+    app.kubernetes.io/name: tdx-quote-generation-service
+    app.kubernetes.io/managed-by: intel-tdx-dcap-operator
+spec:
+  platformRegistration:
+    Offline: {}
+  nodeSelector:
+    - "intel.feature.node.kubernetes.io/sgx=true"

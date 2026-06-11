@@ -1,0 +1,34 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+# TdxQuoteGenerationService is cluster-scoped (scope: Cluster in the CRD),
+# so access must be granted via a ClusterRole — a namespaced Role cannot
+# reference cluster-scoped resources.
+- apiGroups:
+  - trustedservices.intel.com
+  resources:
+  - tdxquotegenerationservices
+  verbs:
+  - get
+  - list
+  - watch
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups:
+  - trustedservices.intel.com
+  resources:
+  - tdxquotegenerationservices/status
+  verbs:
+  - get
+  - update
+  - patch
+- apiGroups:
+  - trustedservices.intel.com
+  resources:
+  - tdxquotegenerationservices/finalizers
+  verbs:
+  - update

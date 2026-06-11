@@ -1,0 +1,20 @@
+# Rust build artifacts (at workspace root /target/)
+**/*.rs.bk
+
+# IDE and editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Kubernetes secrets and sensitive files
+*.key
+*.pem
+*.crt
+kubeconfig
+kubeconfig.yaml
+
+# Local development
+.local/
+tmp/

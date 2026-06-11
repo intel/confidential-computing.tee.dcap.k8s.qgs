@@ -1,0 +1,148 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 700" width="900" height="700">
+  <defs>
+    <style>
+      .title { font: bold 20px sans-serif; fill: #333; }
+      .label { font: 14px sans-serif; fill: #333; }
+      .small { font: 12px sans-serif; fill: #555; }
+      .box { fill: #e3f2fd; stroke: #1976d2; stroke-width: 2; }
+      .node { fill: #fff3e0; stroke: #f57c00; stroke-width: 2; }
+      .secret { fill: #f3e5f5; stroke: #7b1fa2; stroke-width: 2; }
+      .external { fill: #e8f5e9; stroke: #388e3c; stroke-width: 2; }
+      .arrow { stroke: #555; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead); }
+      .arrow-data { stroke: #1976d2; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead-blue); }
+      .arrow-cert { stroke: #7b1fa2; stroke-width: 2.5; fill: none; marker-end: url(#arrowhead-purple); }
+    </style>
+    <marker id="arrowhead" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <polygon points="0 0, 8 4, 0 8" fill="#555" />
+    </marker>
+    <marker id="arrowhead-blue" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <polygon points="0 0, 8 4, 0 8" fill="#1976d2" />
+    </marker>
+    <marker id="arrowhead-purple" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <polygon points="0 0, 8 4, 0 8" fill="#7b1fa2" />
+    </marker>
+    <marker id="arrowhead-small" markerUnits="userSpaceOnUse" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto">
+      <polygon points="0 0, 8 4, 0 8" fill="#555" />
+    </marker>
+  </defs>
+
+  <!-- Title -->
+
+  <!-- Worker Node 1 -->
+  <rect x="50" y="80" width="240" height="280" class="node" rx="5"/>
+  <text x="170" y="105" class="label" text-anchor="middle" font-weight="bold">Worker Node 1</text>
+
+  <!-- QGS Pod -->
+  <rect x="70" y="120" width="200" height="220" class="box" rx="3"/>
+  <text x="170" y="140" class="label" text-anchor="middle" font-weight="bold">QGS Pod</text>
+
+  <!-- Init Container: Platform Info -->
+  <rect x="85" y="155" width="170" height="45" fill="#bbdefb" stroke="#1976d2" stroke-width="1" rx="2"/>
+  <text x="170" y="175" class="small" text-anchor="middle">Init: Get Platform Info</text>
+  <text x="170" y="192" class="small" text-anchor="middle" fill="#1565c0">(pck-cert-tool)</text>
+
+  <!-- Init Container: Cert Watcher -->
+  <rect x="85" y="210" width="170" height="45" fill="#ce93d8" stroke="#7b1fa2" stroke-width="1" rx="2"/>
+  <text x="170" y="230" class="small" text-anchor="middle">Init: Watch Certificates</text>
+  <text x="170" y="247" class="small" text-anchor="middle" fill="#6a1b9a">(pck-cert-tool)</text>
+
+  <!-- Main Container -->
+  <rect x="85" y="265" width="170" height="60" fill="#a5d6a7" stroke="#388e3c" stroke-width="1" rx="2"/>
+  <text x="170" y="290" class="small" text-anchor="middle">Main: TDX QGS</text>
+  <text x="170" y="307" class="small" text-anchor="middle" fill="#2e7d32">Quote Generation</text>
+  <text x="170" y="320" class="small" text-anchor="middle" fill="#2e7d32">Service</text>
+
+  <!-- Worker Node 2 -->
+  <rect x="350" y="80" width="240" height="280" class="node" rx="5"/>
+  <text x="470" y="105" class="label" text-anchor="middle" font-weight="bold">Worker Node 2</text>
+
+  <!-- QGS Pod -->
+  <rect x="370" y="120" width="200" height="220" class="box" rx="3"/>
+  <text x="470" y="140" class="label" text-anchor="middle" font-weight="bold">QGS Pod</text>
+
+  <rect x="385" y="155" width="170" height="45" fill="#bbdefb" stroke="#1976d2" stroke-width="1" rx="2"/>
+  <text x="470" y="175" class="small" text-anchor="middle">Init: Get Platform Info</text>
+  <text x="470" y="192" class="small" text-anchor="middle" fill="#1565c0">(pck-cert-tool)</text>
+
+  <rect x="385" y="210" width="170" height="45" fill="#ce93d8" stroke="#7b1fa2" stroke-width="1" rx="2"/>
+  <text x="470" y="230" class="small" text-anchor="middle">Init: Watch Certificates</text>
+  <text x="470" y="247" class="small" text-anchor="middle" fill="#6a1b9a">(pck-cert-tool)</text>
+
+  <rect x="385" y="265" width="170" height="60" fill="#a5d6a7" stroke="#388e3c" stroke-width="1" rx="2"/>
+  <text x="470" y="290" class="small" text-anchor="middle">Main: TDX QGS</text>
+  <text x="470" y="307" class="small" text-anchor="middle" fill="#2e7d32">Quote Generation</text>
+  <text x="470" y="320" class="small" text-anchor="middle" fill="#2e7d32">Service</text>
+
+  <!-- Control Plane Area -->
+  <rect x="650" y="80" width="220" height="280" class="box" rx="5"/>
+  <text x="760" y="105" class="label" text-anchor="middle" font-weight="bold">Control Plane</text>
+
+  <!-- Secrets -->
+  <rect x="670" y="130" width="180" height="100" class="secret" rx="3"/>
+  <text x="760" y="150" class="small" text-anchor="middle" font-weight="bold">Kubernetes Secrets</text>
+  <text x="760" y="170" class="small" text-anchor="middle">Platform Data Secrets</text>
+  <text x="760" y="185" class="small" text-anchor="middle" fill="#7b1fa2">(type=platform-data)</text>
+  <text x="760" y="205" class="small" text-anchor="middle">PCK Cert Secrets</text>
+  <text x="760" y="220" class="small" text-anchor="middle" fill="#7b1fa2">(fmspc=...)</text>
+
+  <!-- Registrar Pod -->
+  <rect x="670" y="250" width="180" height="95" class="box" rx="3"/>
+  <text x="760" y="270" class="label" text-anchor="middle" font-weight="bold">Registrar Pod</text>
+  <text x="760" y="290" class="small" text-anchor="middle">PCK Cert Registrar</text>
+  <text x="760" y="307" class="small" text-anchor="middle" fill="#1565c0">(pck-cert-tool register)</text>
+  <text x="760" y="325" class="small" text-anchor="middle">Watches platform-data</text>
+  <text x="760" y="338" class="small" text-anchor="middle">Creates PCK secrets</text>
+
+  <!-- Intel PCS -->
+  <rect x="650" y="440" width="220" height="120" class="external" rx="5"/>
+  <text x="760" y="465" class="label" text-anchor="middle" font-weight="bold">Intel PCS</text>
+  <text x="760" y="485" class="small" text-anchor="middle">Provisioning Certification</text>
+  <text x="760" y="502" class="small" text-anchor="middle">Service (v4 API)</text>
+  <text x="760" y="525" class="small" text-anchor="middle" fill="#2e7d32">/pckcerts/config</text>
+  <text x="760" y="542" class="small" text-anchor="middle" fill="#2e7d32">/tcb</text>
+
+  <!-- Arrows -->
+
+  <!-- Step 1: Platform manifest to secrets -->
+  <path d="M 170 200 L 170 420 L 650 420 L 650 180" class="arrow-data"/>
+  <text x="300" y="415" class="small" fill="#1976d2">① Platform Manifest</text>
+
+  <path d="M 470 200 L 470 430 L 650 430 L 650 180" class="arrow-data"/>
+
+  <!-- Step 2: Registrar watches secrets -->
+  <path d="M 760 250 L 760 230" class="arrow"/>
+  <text x="775" y="242" class="small">② Watch</text>
+
+  <!-- Step 3: Registrar to Intel PCS -->
+  <path d="M 760 345 L 760 440" class="arrow-data"/>
+  <text x="635" y="395" class="small" fill="#1976d2">③ Platform Data</text>
+
+  <!-- Step 4: Intel PCS response -->
+  <path d="M 770 440 L 770 345" class="arrow-cert"/>
+  <text x="780" y="395" class="small" fill="#7b1fa2">④ PCK Certificates</text>
+
+  <!-- Step 5: Registrar writes PCK secrets -->
+  <path d="M 750 250 L 740 230" class="arrow-cert"/>
+  <text x="705" y="242" class="small" fill="#7b1fa2">⑤ Write</text>
+
+  <!-- Step 6: QGS watches PCK secrets -->
+  <path d="M 650 190 L 555 235" class="arrow-cert"/>
+  <text x="580" y="205" class="small" fill="#7b1fa2">⑥ Watch</text>
+
+  <path d="M 650 190 L 270 235" class="arrow-cert"/>
+
+  <!-- Step 7: Mount to main container -->
+  <path d="M 110 255 L 110 265" stroke="#555" stroke-width="2.5" fill="none" marker-end="url(#arrowhead-small)"/>
+  <text x="118" y="262" class="small">⑦ Mount</text>
+
+  <path d="M 410 255 L 410 265" stroke="#555" stroke-width="2.5" fill="none" marker-end="url(#arrowhead-small)"/>
+  <text x="480" y="262" class="small">⑦ Mount</text>
+
+  <!-- Legend -->
+  <text x="50" y="620" class="label" font-weight="bold">Flow:</text>
+  <text x="50" y="640" class="small">① Worker nodes collect platform info and create platform-data secrets</text>
+  <text x="50" y="655" class="small">② Registrar watches for new platform-data secrets</text>
+  <text x="50" y="670" class="small">③④ Registrar exchanges platform data with Intel PCS for PCK certificates</text>
+  <text x="50" y="685" class="small">⑤⑥⑦ Registrar creates PCK certificate secrets, QGS pods watch and mount them</text>
+</svg>

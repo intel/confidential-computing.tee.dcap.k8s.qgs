@@ -1,0 +1,11 @@
+# Kustomize build output
+kustomization-*.yaml
+*.generated.yaml
+
+# Generated OLM bundle (produced by make bundle)
+bundle/
+
+# Temporary files
+*.tmp
+*.swp
+*~

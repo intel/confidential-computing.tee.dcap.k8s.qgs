@@ -1,0 +1,26 @@
+# NodeFeatureRule: fake Intel SGX features for e2e testing on kind clusters.
+#
+# Matches any Linux node (system.osrelease.ID always present) and publishes:
+#   - label:            intel.feature.node.kubernetes.io/sgx=true
+#   - extendedResource: sgx.intel.com/enclave=110
+#   - extendedResource: sgx.intel.com/provision=110
+#
+# These are required for the DaemonSet pods to schedule (resource limits in
+# the daemonset template) and for the DaemonSet nodeSelector to match.
+apiVersion: nfd.k8s-sigs.io/v1alpha1
+kind: NodeFeatureRule
+metadata:
+  name: fake-intel-sgx
+spec:
+  rules:
+    - name: "fake-intel-sgx"
+      labels:
+        "intel.feature.node.kubernetes.io/sgx": "true"
+      extendedResources:
+        "sgx.intel.com/enclave": "110"
+        "sgx.intel.com/provision": "110"
+      matchFeatures:
+        - feature: system.osrelease
+          matchExpressions:
+            ID:
+              op: Exists

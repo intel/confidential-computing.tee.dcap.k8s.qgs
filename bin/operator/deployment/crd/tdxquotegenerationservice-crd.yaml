@@ -1,0 +1,156 @@
+# TdxQuoteGenerationService CustomResourceDefinition
+#
+# This CRD defines the TdxQuoteGenerationService resource type for Kubernetes.
+# Apply with: kubectl apply -f tdx_quote_generation_service-crd.yaml
+#
+# Note: When using kube-rs with CustomResource derive, you can also generate
+# the CRD at runtime using: <TdxQuoteGenerationService as kube::CustomResourceExt>::crd()
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: tdxquotegenerationservices.trustedservices.intel.com
+  labels:
+    app.kubernetes.io/name: tdx_quote_generation_service
+    app.kubernetes.io/managed-by: operator
+spec:
+  group: trustedservices.intel.com
+  names:
+    kind: TdxQuoteGenerationService
+    listKind: TdxQuoteGenerationServiceList
+    plural: tdxquotegenerationservices
+    singular: tdx-quote-generation-service
+    shortNames:
+      - tqgs
+  scope: Cluster
+  versions:
+    - name: v1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          description: TdxQuoteGenerationService is a custom resource for managing tdx_quote_generation_service instances.
+          x-kubernetes-validations:
+            - rule: "self.metadata.name == 'intel-tdx-dcap'"
+              message: "Only one TdxQuoteGenerationService is allowed; the resource name must be 'intel-tdx-dcap'"
+          required:
+            - spec
+          properties:
+            apiVersion:
+              type: string
+            kind:
+              type: string
+            metadata:
+              type: object
+            spec:
+              type: object
+              description: Specification of the TdxQuoteGenerationService resource.
+              properties:
+                platformRegistration:
+                  type: object
+                  description: "Platform registration mode configuration. Use 'Online', 'Offline', or 'External' as the single key."
+                  default:
+                    Offline: {}
+                  x-kubernetes-validations:
+                    - rule: "[has(self.Online), has(self.Offline), has(self.External)].filter(mode, mode).size() == 1"
+                      message: "Exactly one platformRegistration mode must be set: Online, Offline, or External"
+                  properties:
+                    Online:
+                      type: object
+                      description: Online registration mode with optional API key
+                      x-kubernetes-validations:
+                        - rule: "!has(self.apiKeySecretName) || self.apiKeySecretName.matches('^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$')"
+                          message: "apiKeySecretName must be a valid Kubernetes Secret name"
+                      properties:
+                        apiKeySecretName:
+                          type: string
+                          description: Name of secret containing Intel PCS API key
+                          maxLength: 253
+                    Offline:
+                      type: object
+                      description: Offline registration mode (platform-registration initContainer runs)
+                    External:
+                      type: object
+                      description: External registration mode (PCK Certificate secrets managed externally, no initContainer for collecting platform manifests)
+                nodeSelector:
+                  type: array
+                  description: Node selector labels in "key=value" format to target specific nodes
+                  maxItems: 16
+                  items:
+                    type: string
+                    maxLength: 317
+                    x-kubernetes-validations:
+                      - rule: "self.matches('^([A-Za-z0-9][-A-Za-z0-9_.]*/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?=.+$')"
+                        message: "nodeSelector entries must be in key=value format with a non-empty key and value"
+                  example:
+                    - "feature.node.kubernetes.io/cpu-sgx.enabled=true"
+                    - "beta.kubernetes.io/instance-type=sgx-enabled"
+            status:
+              type: object
+              description: Status of the TdxQuoteGenerationService resource.
+              properties:
+                daemonsetName:
+                  type: string
+                  description: Name of the managed DaemonSet
+                desiredNumberScheduled:
+                  type: integer
+                  description: Number of nodes that should be running the daemon pod
+                currentNumberScheduled:
+                  type: integer
+                  description: Number of nodes that are running at least one daemon pod
+                numberReady:
+                  type: integer
+                  description: Number of nodes that have one or more ready daemon pods
+                registrationDeploymentName:
+                  type: string
+                  description: Name of the platform registration Deployment (only when Online mode)
+                registrationDeploymentReady:
+                  type: boolean
+                  description: Whether the registration deployment is ready (only when Online mode)
+                conditions:
+                  type: array
+                  description: Status conditions following Kubernetes conventions.
+                  items:
+                    type: object
+                    properties:
+                      type:
+                        type: string
+                        description: Type of condition (e.g., Ready, Progressing).
+                      status:
+                        type: string
+                        description: Status of the condition (True, False, Unknown).
+                        enum:
+                          - "True"
+                          - "False"
+                          - "Unknown"
+                      reason:
+                        type: string
+                        description: One-word CamelCase reason for the condition.
+                      message:
+                        type: string
+                        description: Human-readable message with details.
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                        description: Last time the condition transitioned.
+                      observedGeneration:
+                        type: integer
+                        format: int64
+                        description: The generation that was observed.
+                    required:
+                      - type
+                      - status
+                observedGeneration:
+                  type: integer
+                  format: int64
+                  description: The generation most recently observed by the controller.
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Ready
+          type: string
+          jsonPath: .status.conditions[?(@.type=="Ready")].status
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

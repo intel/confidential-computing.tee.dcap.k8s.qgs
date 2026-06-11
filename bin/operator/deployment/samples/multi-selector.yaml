@@ -1,0 +1,22 @@
+# Example: TdxQuoteGenerationService with Multiple Node Selectors
+#
+# This example demonstrates using multiple node selector labels
+# to target specific nodes in a heterogeneous cluster.
+#
+# Apply with: kubectl apply -f multi-selector.yaml
+
+apiVersion: trustedservices.intel.com/v1
+kind: TdxQuoteGenerationService
+metadata:
+  name: intel-tdx-dcap
+  labels:
+    app.kubernetes.io/name: tdx-quote-generation-service
+    app.kubernetes.io/managed-by: intel-tdx-dcap-operator
+spec:
+  platformRegistration:
+    Online:
+      apiKeySecretName: intel-pcs-api-key
+  nodeSelector:
+    - "intel.feature.node.kubernetes.io/sgx=true"
+    - "node-role.kubernetes.io/worker=true"
+    - "topology.kubernetes.io/zone=us-west-1a"

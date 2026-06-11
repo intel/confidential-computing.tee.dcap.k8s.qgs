@@ -1,0 +1,16 @@
+# Build context: repo root
+#
+# Extends intel-tdx-qgs:latest with:
+#   - fake get_platform_info binary (fixed JSON, no SGX hardware needed)
+#   - busybox static binary for kubectl-exec-based test verification
+
+FROM rust:slim-bookworm AS fake-builder
+WORKDIR /src
+COPY test/fake-platform-info/ .
+RUN cargo build --release
+
+FROM busybox:stable-musl AS busybox-stage
+
+FROM intel-tdx-qgs:latest
+COPY --from=fake-builder /src/target/release/fake-platform-info /usr/local/bin/get_platform_info
+COPY --from=busybox-stage /bin/busybox /bin/busybox

@@ -1,0 +1,40 @@
+# Rust build artifacts
+target/
+**/target/
+
+# Cargo lock files (keep for reproducible builds)
+# Cargo.lock
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# Test files (unit/integration tests compiled into binaries, not needed in images)
+**/tests/
+
+# Example files
+**/example*.csv
+**/cse-*.csv
+
+# Build artifacts
+**/*.o
+**/*.a
+**/*.so
+**/get_platform_id
+
+# Cargo registry cache
+.cargo/
+
+# MacOS
+.DS_Store

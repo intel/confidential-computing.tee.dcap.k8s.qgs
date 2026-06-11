@@ -1,0 +1,41 @@
+# Trivy misconfig ignore rules for bin/operator/templates/daemonset.yaml
+# Each entry documents the reason the finding is accepted or not applicable.
+
+vulnerabilities: []
+
+misconfigurations:
+  - id: KSV-0001
+    statement: "platform-registration requires privileged access to SGX efivars and enclave provisioning; allowPrivilegeEscalation is an accepted consequence"
+
+  - id: KSV-0012
+    statement: "SGX efivars and /dev/sgx_* access require root for platform-registration and tdx-qgs"
+
+  - id: KSV-0013
+    statement: "Image tags are template placeholders replaced by the operator with digest-pinned references at deploy time"
+
+  - id: KSV-0017
+    statement: "platform-registration requires privileged mode for SGX EFI variable access"
+
+  - id: KSV-0020
+    statement: "Root UIDs required for /dev/sgx_* access in platform-registration and tdx-qgs; pck-certs-watcher runs as nobody"
+
+  - id: KSV-0021
+    statement: "GID 0 required for root containers; pck-certs-watcher inherits nobody GID from image"
+
+  - id: KSV-0023
+    statement: "efivars hostPath required for SGX registration; qgs-socket hostPath required for TDX quote socket"
+
+  - id: KSV-0105
+    statement: "runAsUser 0 required for platform-registration and tdx-qgs /dev/sgx_* access"
+
+  - id: KSV-0110
+    statement: "Namespace is set by the operator at deploy time; template intentionally omits namespace"
+
+  - id: KSV-0048
+    statement: "Operator must create and patch daemonsets (TDX QGS) and deployments (registrar) in its namespace; this is the operator's core reconciliation function"
+
+  - id: KSV-0113
+    statement: "Kubernetes RBAC escalation prevention requires the operator to hold secrets permissions itself before it can create Roles that grant secrets access to operand service accounts (pck-cert-tool registrar)"
+
+  - id: DS-0026
+    statement: "HEALTHCHECK not used; container health is managed by Kubernetes liveness/readiness probes at the pod level"
