@@ -2,23 +2,10 @@ name: Route branch events to external dispatcher (if any)
 # This action only runs on repositories which are named EXTENSION_THIS_REPO_NAME and have the extension dispatcher defined.
 # Its purpose is to kick-off any auxiliary GHA tasks that are NOT on the target branch, but may be required by repo/fork policy.
 
-permissions:
-   actions: write
-   contents: none  # Dropping all non-required permissions (incl. code checkout) to harden, esp. given pull_request_target is one of the triggers. Only `actions: write` is granted - for createWorkflowDispatch()
-   checks: none
-   deployments: none
-   models: none
-   id-token: none
-   issues: none
-   discussions: none
-   packages: none
-   pages: none
-   pull-requests: none
-   repository-projects: none
-   security-events: none
-   statuses: none
-   artifact-metadata: none
-   attestations: none
+# Set workflow-level permissions to an empty map (deny-by-default for all scopes).
+# GitHub implicitly grants metadata: read regardless of this setting.
+permissions: {}
+
 on:
   create:
   merge_group:
@@ -44,6 +31,25 @@ jobs:
   publish_branch_event_to_extensions:
     name: "On branch action: emit an event for external handler, if any [ignore me, I'm not a real check]"
     runs-on: ${{vars.EXTENSION_RUNNER_ID}}
+    # Explicitly declare all permission scopes for this job. Only `actions: write` is needed
+    # (for createWorkflowDispatch). All other scopes are set to none to enforce least-privilege.
+    permissions:
+      actions: write
+      contents: none  # Dropping all non-required permissions (incl. code checkout) to harden, esp. given pull_request_target is one of the triggers. Only `actions: write` is granted - for createWorkflowDispatch()
+      checks: none
+      deployments: none
+      models: none
+      id-token: none
+      issues: none
+      discussions: none
+      packages: none
+      pages: none
+      pull-requests: none
+      repository-projects: none
+      security-events: none
+      statuses: none
+      artifact-metadata: none
+      attestations: none
     # Conditions: only run if in the designated repo and not auto-triggered by Copilot actions
     #             Reacts on all trigger events listed above ('on:' section), except labeling events, which are filtered to only react to:
     #             - "skip-" labels (both adding and removing)
