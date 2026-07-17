@@ -7,3 +7,12 @@ updates:
     open-pull-requests-limit: 3
     allow:
       - dependency-type: direct
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      github-actions:
+        patterns:
+          - "*"

@@ -1,0 +1,84 @@
+name: Trivy security scan
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  trivy-scan-dockerfiles:
+    name: Scan Dockerfiles
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run Trivy SARIF scan (Dockerfiles)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
+        with:
+          scan-type: config
+          scan-ref: build/
+          exit-code: 0
+          trivyignores: .trivyignore.yaml
+          format: sarif
+          output: trivy-dockerfiles.sarif
+
+      - name: Upload SARIF results
+        if: always()
+        uses: github/codeql-action/upload-sarif@b7351df727350dca84cb9d725d57dcf5bc82ba26 # v3.37.1
+        with:
+          sarif_file: trivy-dockerfiles.sarif
+          category: trivy-dockerfiles
+
+      - name: Enforce Trivy policy (Dockerfiles)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
+        with:
+          scan-type: config
+          scan-ref: build/
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          trivyignores: .trivyignore.yaml
+
+  trivy-scan-deployments:
+    name: Scan Kubernetes manifests
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Run Trivy SARIF scan (Kubernetes manifests)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
+        with:
+          scan-type: config
+          scan-ref: bin/operator/
+          exit-code: 0
+          trivyignores: .trivyignore.yaml
+          format: sarif
+          output: trivy-deployments.sarif
+
+      - name: Upload SARIF results
+        if: always()
+        uses: github/codeql-action/upload-sarif@b7351df727350dca84cb9d725d57dcf5bc82ba26 # v3.37.1
+        with:
+          sarif_file: trivy-deployments.sarif
+          category: trivy-deployments
+
+      - name: Enforce Trivy policy (Kubernetes manifests)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
+        with:
+          scan-type: config
+          scan-ref: bin/operator/
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          trivyignores: .trivyignore.yaml
+
