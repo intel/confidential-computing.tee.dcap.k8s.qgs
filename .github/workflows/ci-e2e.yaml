@@ -1,0 +1,124 @@
+name: e2e tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    uses: ./.github/workflows/ci-rust.yaml
+    permissions:
+      contents: read
+
+  docker:
+    name: Build ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: operator
+            dockerfile: build/operator/Dockerfile
+            context: .
+            tag: intel-tdx-dcap-operator:latest
+          - name: tdx-qgs
+            dockerfile: build/tdx-qgs/Dockerfile
+            context: .
+            tag: intel-tdx-qgs:latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build ${{ matrix.name }}
+        run: |
+          docker buildx build \
+            --cache-from type=gha,scope=${{ matrix.name }} \
+            --cache-to   type=gha,mode=max,scope=${{ matrix.name }} \
+            --load -t ${{ matrix.tag }} \
+            -f ${{ matrix.dockerfile }} ${{ matrix.context }}
+      - name: Save image
+        run: docker save ${{ matrix.tag }} | gzip > /tmp/image.tar.gz
+      - name: Upload image artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-${{ matrix.name }}
+          path: /tmp/image.tar.gz
+          retention-days: 1
+
+  docker-qgs-test:
+    name: Build tdx-qgs-test image
+    needs: [docker]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - name: Download tdx-qgs image
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          name: image-tdx-qgs
+          path: /tmp/images
+      - name: Load tdx-qgs image
+        run: docker load < /tmp/images/image.tar.gz
+      - name: Build tdx-qgs-test
+        run: |
+          docker build -t intel-tdx-qgs-test:latest \
+            -f test/e2e/Dockerfile.test .
+      - name: Save image
+        run: docker save intel-tdx-qgs-test:latest | gzip > /tmp/image.tar.gz
+      - name: Upload image artifact
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: image-tdx-qgs-test
+          path: /tmp/image.tar.gz
+          retention-days: 1
+
+  e2e:
+    name: Run e2e tests (k8s ${{ matrix.k8s_version }})
+    needs: [rust, docker, docker-qgs-test]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - k8s_version: "1.36"
+            node_image: "kindest/node:v1.36.1@sha256:3489c7674813ba5d8b1a9977baea8a6e553784dab7b84759d1014dbd78f7ebd5"
+          - k8s_version: "1.35"
+            node_image: "kindest/node:v1.35.5@sha256:ce977ae6d65918d0b58a5f8b5e940429c2ce42fa3a5619ec2bbc60b949c0ac95"
+    env:
+      NUM_WORKERS: "2"
+      SKIP_BUILD: "1"
+      KIND_NODE_IMAGE: ${{ matrix.node_image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install kind
+        run: |
+          curl -Lo kind https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-amd64
+          echo "50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54  kind" | sha256sum -c
+          chmod +x kind
+          sudo mv kind /usr/local/bin/kind
+
+      - name: Download image artifacts
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          pattern: image-*
+          path: /tmp/images
+
+      - name: Load images into Docker
+        run: |
+          for f in /tmp/images/image-*/image.tar.gz; do docker load < "$f"; done
+
+      - name: Run e2e
+        run: test/e2e/run.sh

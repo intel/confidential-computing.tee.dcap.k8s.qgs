@@ -27,6 +27,10 @@ QGS_NAMESPACE="${QGS_NAMESPACE:-intel-dcap-operator-system}"
 OPERATOR_NAMESPACE="intel-dcap-operator-system"
 TIMEOUT="${TIMEOUT:-180}"
 NUM_WORKERS="${NUM_WORKERS:-5}"
+# Set SKIP_BUILD=1 to skip docker builds (e.g. when images are pre-built in CI).
+SKIP_BUILD="${SKIP_BUILD:-0}"
+# Set KIND_NODE_IMAGE to override the k8s node image (e.g. kindest/node:v1.35.5@sha256:...).
+KIND_NODE_IMAGE="${KIND_NODE_IMAGE:-}"
 
 # Certificate content written to each -pck secret and verified in the pods.
 TEST_CERT="e2e-test-certificate-placeholder"
@@ -101,25 +105,32 @@ EOF
 
 log "Creating kind cluster '$KIND_CLUSTER' (1 control-plane + $NUM_WORKERS workers)"
 # kind resolves extraMounts hostPath relative to cwd; run in subshell to avoid changing ours
-(cd "$SCRIPT_DIR" && kind create cluster --name "$KIND_CLUSTER" --config kind-config.yaml --wait 10m)
+_kind_image_flag=""
+[ -n "$KIND_NODE_IMAGE" ] && _kind_image_flag="--image $KIND_NODE_IMAGE"
+# shellcheck disable=SC2086
+(cd "$SCRIPT_DIR" && kind create cluster --name "$KIND_CLUSTER" --config kind-config.yaml --wait 10m $_kind_image_flag)
 
 # ---------------------------------------------------------------------------
 # 2. Build container images
 # ---------------------------------------------------------------------------
 
-log "Building intel-tdx-qgs:latest"
-docker build -t intel-tdx-qgs:latest \
-    -f "$REPO_ROOT/build/tdx-qgs/Dockerfile" "$REPO_ROOT"
+if [ "$SKIP_BUILD" = "1" ]; then
+    log "Skipping docker builds (SKIP_BUILD=1)"
+else
+    log "Building intel-tdx-qgs:latest"
+    docker build -t intel-tdx-qgs:latest \
+        -f "$REPO_ROOT/build/tdx-qgs/Dockerfile" "$REPO_ROOT"
 
-log "Building intel-tdx-dcap-operator:latest"
-docker build -t intel-tdx-dcap-operator:latest \
-    -f "$REPO_ROOT/build/operator/Dockerfile" "$REPO_ROOT"
+    log "Building intel-tdx-dcap-operator:latest"
+    docker build -t intel-tdx-dcap-operator:latest \
+        -f "$REPO_ROOT/build/operator/Dockerfile" "$REPO_ROOT"
 
-# Test variant: replaces get_platform_info with the fake binary and adds
-# busybox for exec-based verification.
-log "Building intel-tdx-qgs-test:latest"
-docker build -t intel-tdx-qgs-test:latest \
-    -f "$SCRIPT_DIR/Dockerfile.test" "$REPO_ROOT"
+    # Test variant: replaces get_platform_info with the fake binary and adds
+    # busybox for exec-based verification.
+    log "Building intel-tdx-qgs-test:latest"
+    docker build -t intel-tdx-qgs-test:latest \
+        -f "$SCRIPT_DIR/Dockerfile.test" "$REPO_ROOT"
+fi
 
 # ---------------------------------------------------------------------------
 # 3. Load images into the kind cluster

@@ -1,0 +1,49 @@
+name: CodeQL analysis
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  codeql:
+    name: Analyze C code
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      SGX_DCAP_VERSION: "1.26"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install SGX dependencies
+        run: |
+          curl -fsSL https://download.01.org/intel-sgx/sgx_repo/ubuntu/intel-sgx-deb.key | \
+            sudo gpg --dearmor -o /usr/share/keyrings/intel-sgx.gpg
+          echo "deb [signed-by=/usr/share/keyrings/intel-sgx.gpg] https://download.01.org/intel-sgx/sgx_repo/ubuntu noble main" | \
+            sudo tee /etc/apt/sources.list.d/intel-sgx.list
+          curl -sSLf "https://download.01.org/intel-sgx/sgx_repo/ubuntu/apt_preference_files/99dcap_${{ env.SGX_DCAP_VERSION }}_noble_custom_version.cfg" | \
+            sudo tee /etc/apt/preferences.d/99dcap
+          sudo apt-get update -q
+          sudo apt-get install --no-install-recommends -y libsgx-headers libsgx-urts
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@b7351df727350dca84cb9d725d57dcf5bc82ba26 # v3.37.1
+        with:
+          languages: c-cpp
+          build-mode: manual
+
+      - name: Build
+        working-directory: bin/get-platform-info
+        run: make
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@b7351df727350dca84cb9d725d57dcf5bc82ba26 # v3.37.1
+        with:
+          category: /language:c-cpp
