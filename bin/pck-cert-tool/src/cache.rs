@@ -63,7 +63,7 @@ fn get_expiration_time() -> Result<u64, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_cache_blob, EXPIRE_HOURS, SGX_QPL_CACHE_MULTICERTS};
+    use super::{EXPIRE_HOURS, SGX_QPL_CACHE_MULTICERTS, build_cache_blob};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn read_u16_le(data: &[u8], offset: &mut usize) -> u16 {
@@ -114,7 +114,10 @@ mod tests {
 
         let mut offset = 0usize;
         assert_eq!(read_u16_le(&blob, &mut offset), 1);
-        assert_eq!(read_u32_le(&blob, &mut offset), SGX_QPL_CACHE_MULTICERTS as u32);
+        assert_eq!(
+            read_u32_le(&blob, &mut offset),
+            SGX_QPL_CACHE_MULTICERTS as u32
+        );
         assert_eq!(read_u64_le(&blob, &mut offset), expiration_time);
 
         assert_eq!(read_len_prefixed_str(&blob, &mut offset), cpu_svn);
