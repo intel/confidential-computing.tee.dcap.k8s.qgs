@@ -5,7 +5,7 @@ license = "Apache-2.0"
 edition = "2024"
 
 [dependencies]
-kube = { workspace = true, features = ["runtime", "derive"] }
+kube = { workspace = true, features = ["runtime", "derive", "cel"] }
 k8s-openapi = { workspace = true }
 tokio = { workspace = true }
 futures = { workspace = true }

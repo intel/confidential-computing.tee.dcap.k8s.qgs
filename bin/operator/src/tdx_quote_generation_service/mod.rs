@@ -12,4 +12,4 @@ pub use finalizer::FINALIZER;
 pub use status::{Condition, ConditionManager, ConditionStatus};
 pub use types::TdxQuoteGenerationServiceSpec;
 pub use types::TdxQuoteGenerationServiceStatus;
-pub use types::{PlatformRegistration, TdxQuoteGenerationService};
+pub use types::{NodeSelectorEntry, OnlineConfig, PlatformRegistration, TdxQuoteGenerationService};

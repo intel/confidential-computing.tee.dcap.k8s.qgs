@@ -1,4 +1,4 @@
-.PHONY: bundle
+.PHONY: bundle generate
 
 # Project settings
 PROJECT_NAME := intel-tdx-dcap-operator
@@ -10,6 +10,12 @@ DEFAULT_CHANNEL ?= alpha
 BUNDLE_METADATA_OPTS ?= --channels=$(CHANNELS) --default-channel=$(DEFAULT_CHANNEL)
 KUSTOMIZE_DIR := deployment/manifests
 BUNDLE_DIR := deployment/bundle
+
+CRD_FILE := deployment/crd/tdxquotegenerationservice-crd.yaml
+
+# Regenerate CRD YAML from Rust types
+generate:
+	cargo run --bin generate_crd > $(CRD_FILE)
 
 # Generate OLM bundle. Override VERSION, CHANNELS, DEFAULT_CHANNEL as needed.
 bundle:
