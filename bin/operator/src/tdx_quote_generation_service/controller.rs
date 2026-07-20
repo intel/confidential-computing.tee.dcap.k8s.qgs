@@ -32,7 +32,7 @@ use tracing::{debug, error, info, instrument, warn};
 
 use crate::error::{Error, Result};
 use crate::tdx_quote_generation_service::{
-    ConditionStatus, PlatformRegistration, TdxQuoteGenerationService,
+    ConditionStatus, OnlineConfig, PlatformRegistration, TdxQuoteGenerationService,
 };
 
 /// DaemonSet template embedded at compile time
@@ -141,7 +141,7 @@ async fn reconcile_resource(
     // Create or update Deployment if Online registration is configured
     let (deployment_name, deployment_ready) = if matches!(
         &resource.spec.platform_registration,
-        PlatformRegistration::Online { .. }
+        PlatformRegistration::Online(_)
     ) {
         let deployment_name = create_or_update_deployment(ctx, resource, &namespace).await?;
 
@@ -500,7 +500,8 @@ async fn create_or_update_daemonset(
 
     // Apply node selector if provided
     if let Some(ref selectors) = spec.node_selector {
-        pod_spec.node_selector = Some(parse_node_selectors(selectors)?);
+        let strings: Vec<String> = selectors.iter().map(|e| e.0.clone()).collect();
+        pod_spec.node_selector = Some(parse_node_selectors(&strings)?);
     }
 
     // Override all container images from INTEL_TDX_QGS_SHA256 env if set
@@ -562,9 +563,10 @@ async fn create_or_update_deployment(
         .ok_or_else(|| Error::Generic("Deployment template missing container".to_string()))?;
 
     // If the CR specifies a custom API key secret name, override the default from the template
-    if let PlatformRegistration::Online {
+    if let PlatformRegistration::Online(OnlineConfig {
         api_key_secret_name: Some(secret_name),
-    } = &resource.spec.platform_registration
+        ..
+    }) = &resource.spec.platform_registration
     {
         let env = container.env.get_or_insert_with(Vec::new);
         let api_key_env = EnvVar {
