@@ -404,7 +404,7 @@ async fn create_or_update_role_binding(
             ..Default::default()
         }]),
         role_ref: RoleRef {
-            api_group: "rbac.authorization.k8s.io".to_string(),
+            api_group: Some("rbac.authorization.k8s.io".to_string()),
             kind: "Role".to_string(),
             name: resource_name.clone(),
         },
