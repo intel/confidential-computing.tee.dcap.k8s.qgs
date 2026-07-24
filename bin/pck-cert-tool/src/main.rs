@@ -642,8 +642,25 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
     let client = Client::try_default().await?;
     let secrets: Api<Secret> = Api::namespaced(client.clone(), namespace);
 
-    // Create HTTP client for Intel PCS API
-    let http_client = reqwest::Client::new();
+    // Create HTTP client for Intel PCS API with retry on 5xx / 429
+    let retry_policy = reqwest::retry::for_host("api.trustedservices.intel.com")
+        .max_retries_per_request(3)
+        .classify_fn(|req_rep| {
+            let retryable = req_rep.error().is_some()
+                || req_rep
+                    .status()
+                    .map(|s| s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS)
+                    .unwrap_or(false);
+            if retryable {
+                req_rep.retryable()
+            } else {
+                req_rep.success()
+            }
+        });
+    let http_client = reqwest::Client::builder()
+        .retry(retry_policy)
+        .build()
+        .context("Failed to build HTTP client")?;
 
     // Set up watch with label selector for platform-data secrets
     let watch_config = watcher::Config::default().labels("type=platform-data");
