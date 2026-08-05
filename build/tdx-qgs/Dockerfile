@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-FROM debian:12 AS builder
+FROM debian:13 AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -12,10 +12,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
+ARG DCAP_TARBALL_SHA256="977d652e6efa2fcb6ec7763db08ae5bbb6be8948c3aec55642832b5a940e9a74"
+
 # Download and install Intel SGX local repository
-RUN curl -fsSL https://download.01.org/intel-sgx/sgx-dcap/1.26/linux/distro/Debian12/sgx_debian_local_repo.tgz -o sgx_debian_local_repo.tgz \
+RUN curl -fsSL https://download.01.org/intel-sgx/sgx-dcap/1.27/linux/distro/Debian13/sgx_debian_local_repo.tgz -o sgx_debian_local_repo.tgz \
+    && echo "$DCAP_TARBALL_SHA256 sgx_debian_local_repo.tgz" | sha256sum -c - \
     && tar xzf sgx_debian_local_repo.tgz \
-    && echo "deb [trusted=yes arch=amd64] file:/sgx_debian_local_repo bookworm main" > /etc/apt/sources.list.d/intel-sgx.list
+    && echo "deb [trusted=yes arch=amd64] file:/sgx_debian_local_repo trixie main" > /etc/apt/sources.list.d/intel-sgx.list
 
 # Install SGX development packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -82,8 +85,8 @@ RUN dpkg-query -W -f='${Package}\n' > /tmp/base-pkglist.txt \
 
 COPY LICENSE /rootfs/usr/local/share/pck-cert-tool/LICENSE
 
-# Final stage — distroless/cc-debian12 provides glibc, libgcc, libstdc++, libssl, ca-certificates
-FROM gcr.io/distroless/cc-debian12
+# Final stage — distroless/cc-debian13 provides glibc, libgcc, libstdc++, libssl, ca-certificates
+FROM gcr.io/distroless/cc-debian13
 
 COPY --from=builder /rootfs/ /
 
