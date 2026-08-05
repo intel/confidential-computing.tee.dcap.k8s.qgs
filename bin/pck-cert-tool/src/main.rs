@@ -23,11 +23,16 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
+use tokio::time::sleep;
 use tracing::{debug, error, info, instrument, warn};
 use x509_parser::der_parser::{oid, oid::Oid, parse_der};
 use x509_parser::pem::Pem;
 use x509_parser::prelude::{parse_x509_certificate, parse_x509_pem};
 use x509_parser::x509::SubjectPublicKeyInfo;
+
+/// Backoff delay between watch error retries to prevent log storms during API server downtime.
+const K8S_API_WATCH_ERROR_BACKOFF: Duration = Duration::from_secs(10);
 
 /// EFI variable name for SGX platform manifest
 const SGX_PLATFORM_MANIFEST_EFI_VAR: &str =
@@ -584,7 +589,7 @@ async fn watch_certificates(
                     }
                     Some(Err(e)) => {
                         error!(error = %e, "Watch error");
-                        // Continue watching despite errors
+                        sleep(K8S_API_WATCH_ERROR_BACKOFF).await;
                     }
                     None => {
                         info!("Watch stream ended");
@@ -713,6 +718,7 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
                     }
                     Some(Err(e)) => {
                         warn!(error = %e, "Watch error");
+                        sleep(K8S_API_WATCH_ERROR_BACKOFF).await;
                     }
                     None => {
                         info!("Watch stream ended");
