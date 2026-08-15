@@ -107,6 +107,7 @@ spec:
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           runAsUser: 0
+          runAsGroup: 992
           seLinuxOptions:
             type: spc_t
           capabilities:
