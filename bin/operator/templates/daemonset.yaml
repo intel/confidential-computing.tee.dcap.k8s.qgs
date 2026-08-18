@@ -98,6 +98,14 @@ spec:
         volumeMounts:
         - name: dcap-qcnl-cache
           mountPath: /run/dcap/cache/
+        readinessProbe:
+          exec:
+            command:
+            - pck-cert-tool
+            - probe
+            - cache-ready
+            - /run/dcap/cache/.dcap-qcnl
+          periodSeconds: 10
       containers:
       - name: tdx-qgs
         image: intel-tdx-qgs:latest
@@ -128,6 +136,23 @@ spec:
           value: "/run/dcap/qcnl_conf"
         - name: XDG_CACHE_HOME
           value: "/run/dcap/cache"
+        startupProbe:
+          exec:
+            command:
+            - pck-cert-tool
+            - probe
+            - check-socket
+            - /var/run/tdx-qgs/qgs.socket
+          periodSeconds: 2
+          failureThreshold: 30
+        livenessProbe:
+          exec:
+            command:
+            - pck-cert-tool
+            - probe
+            - check-socket
+            - /var/run/tdx-qgs/qgs.socket
+          periodSeconds: 60
         volumeMounts:
         - name: dcap-qcnl-cache
           mountPath: /run/dcap/cache
