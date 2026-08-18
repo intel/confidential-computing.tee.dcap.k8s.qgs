@@ -710,7 +710,7 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
                             )
                             .await
                             {
-                                error!(platform_secret = %secret_name, error = %e, "Error processing platform-data secret");
+                                error!(platform_secret = %secret_name, error = ?e, "Error processing platform-data secret");
                             }
                         });
 
