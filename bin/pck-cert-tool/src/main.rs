@@ -23,11 +23,16 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
+use tokio::time::sleep;
 use tracing::{debug, error, info, instrument, warn};
 use x509_parser::der_parser::{oid, oid::Oid, parse_der};
 use x509_parser::pem::Pem;
 use x509_parser::prelude::{parse_x509_certificate, parse_x509_pem};
 use x509_parser::x509::SubjectPublicKeyInfo;
+
+/// Backoff delay between watch error retries to prevent log storms during API server downtime.
+const K8S_API_WATCH_ERROR_BACKOFF: Duration = Duration::from_secs(10);
 
 /// EFI variable name for SGX platform manifest
 const SGX_PLATFORM_MANIFEST_EFI_VAR: &str =
@@ -584,7 +589,7 @@ async fn watch_certificates(
                     }
                     Some(Err(e)) => {
                         error!(error = %e, "Watch error");
-                        // Continue watching despite errors
+                        sleep(K8S_API_WATCH_ERROR_BACKOFF).await;
                     }
                     None => {
                         info!("Watch stream ended");
@@ -642,8 +647,25 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
     let client = Client::try_default().await?;
     let secrets: Api<Secret> = Api::namespaced(client.clone(), namespace);
 
-    // Create HTTP client for Intel PCS API
-    let http_client = reqwest::Client::new();
+    // Create HTTP client for Intel PCS API with retry on 5xx / 429
+    let retry_policy = reqwest::retry::for_host("api.trustedservices.intel.com")
+        .max_retries_per_request(3)
+        .classify_fn(|req_rep| {
+            let retryable = req_rep.error().is_some()
+                || req_rep
+                    .status()
+                    .map(|s| s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS)
+                    .unwrap_or(false);
+            if retryable {
+                req_rep.retryable()
+            } else {
+                req_rep.success()
+            }
+        });
+    let http_client = reqwest::Client::builder()
+        .retry(retry_policy)
+        .build()
+        .context("Failed to build HTTP client")?;
 
     // Set up watch with label selector for platform-data secrets
     let watch_config = watcher::Config::default().labels("type=platform-data");
@@ -688,7 +710,7 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
                             )
                             .await
                             {
-                                error!(platform_secret = %secret_name, error = %e, "Error processing platform-data secret");
+                                error!(platform_secret = %secret_name, error = ?e, "Error processing platform-data secret");
                             }
                         });
 
@@ -696,6 +718,7 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
                     }
                     Some(Err(e)) => {
                         warn!(error = %e, "Watch error");
+                        sleep(K8S_API_WATCH_ERROR_BACKOFF).await;
                     }
                     None => {
                         info!("Watch stream ended");
