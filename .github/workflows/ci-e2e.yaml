@@ -27,6 +27,10 @@ jobs:
             dockerfile: build/operator/Dockerfile
             context: .
             tag: intel-tdx-dcap-operator:latest
+          - name: operator-ubi
+            dockerfile: build/operator/ubi.Dockerfile
+            context: .
+            tag: intel-tdx-dcap-operator-ubi:latest
           - name: tdx-qgs
             dockerfile: build/tdx-qgs/Dockerfile
             context: .

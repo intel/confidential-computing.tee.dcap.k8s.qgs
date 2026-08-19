@@ -21,3 +21,21 @@ updates:
       github-actions:
         patterns:
           - "*"
+
+  - package-ecosystem: docker
+    directory: /build/tdx-qgs
+    schedule:
+      interval: weekly
+    groups:
+      docker-tdx-qgs:
+        patterns:
+          - "*"
+
+  - package-ecosystem: docker
+    directory: /build/operator
+    schedule:
+      interval: weekly
+    groups:
+      docker-operator:
+        patterns:
+          - "*"

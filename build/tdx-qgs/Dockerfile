@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-FROM debian:13 AS builder
+FROM debian:13@sha256:3352c2e13876c8a5c5873ef20870e1939e73cb9a3c1aeba5e3e72172a85ce9ed AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -86,7 +86,7 @@ RUN dpkg-query -W -f='${Package}\n' > /tmp/base-pkglist.txt \
 COPY LICENSE /rootfs/usr/local/share/pck-cert-tool/LICENSE
 
 # Final stage — distroless/cc-debian13 provides glibc, libgcc, libstdc++, libssl, ca-certificates
-FROM gcr.io/distroless/cc-debian13
+FROM gcr.io/distroless/cc-debian13@sha256:ed7c407fd64eb0af9dddb9456b94cee188a40a7f53cf38c9836e1e9ae14fca02
 
 COPY --from=builder /rootfs/ /
 
