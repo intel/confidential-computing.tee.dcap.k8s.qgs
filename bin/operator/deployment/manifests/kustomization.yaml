@@ -1,5 +1,6 @@
 resources:
 - ../default
 - ../samples
-- scc-privileged.yaml
 - bases/intel-tdx-dcap-operator.clusterserviceversion.yaml
+- scc-clusterrole.yaml
+- scc-clusterrolebinding.yaml

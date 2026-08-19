@@ -28,5 +28,6 @@ bundle:
 		--package=$(PROJECT_NAME) \
 		--output-dir=$(BUNDLE_DIR) \
 		--overwrite \
+		--extra-service-accounts intel-tdx-dcap-qgs \
 		$(BUNDLE_METADATA_OPTS)
 	operator-sdk bundle validate $(BUNDLE_DIR)
