@@ -24,7 +24,7 @@ COPY bin/pck-cert-tool/src bin/pck-cert-tool/src
 RUN cargo build --release -p operator
 
 # Final stage — ubi-micro; operator uses rustls/ring so only needs glibc
-FROM registry.access.redhat.com/ubi10/ubi-micro:latest@sha256:6b19fae23a4bab50b2494471674577365a64667365d658671e3f9e8a5a698df3
+FROM registry.access.redhat.com/ubi10/ubi-micro:latest@sha256:cabedb588644e9da2c95ebb173a67b78d58aaedcb0eaa42a86f880bcef8a0b2f
 
 COPY --from=builder /build/target/release/operator /operator
 COPY LICENSE /licenses/LICENSE
