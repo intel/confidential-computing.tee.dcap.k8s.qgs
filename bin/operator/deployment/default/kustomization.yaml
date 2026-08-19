@@ -16,3 +16,18 @@ resources:
 labels:
 - pairs:
     app.kubernetes.io/part-of: intel-dcap-operator
+
+# Inject the resolved QGS ServiceAccount name (namePrefix + "qgs") into the
+# manager deployment's QGS_SERVICE_ACCOUNT env var so namePrefix is the single
+# place to update when the prefix changes.
+replacements:
+- source:
+    kind: ServiceAccount
+    name: qgs
+    fieldPath: metadata.name
+  targets:
+  - select:
+      kind: Deployment
+      name: controller-manager
+    fieldPaths:
+    - spec.template.spec.containers.[name=operator].env.[name=QGS_SERVICE_ACCOUNT].value

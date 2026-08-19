@@ -13,7 +13,7 @@ spec:
       labels:
         app: intel-tdx-qgs
     spec:
-      serviceAccountName: pck-cert-tool
+      serviceAccountName: intel-tdx-dcap-qgs
       priorityClassName: system-node-critical
       securityContext:
         seccompProfile:
