@@ -176,19 +176,28 @@ kubectl rollout status deployment/intel-tdx-dcap-controller-manager \
 log "Applying TdxQuoteGenerationService (Offline mode)"
 kubectl apply -f "$REPO_ROOT/bin/operator/deployment/samples/offline-mode.yaml"
 
-log "Waiting for QGS DaemonSet rollout"
+log "Waiting for QGS DaemonSet to be created"
 kubectl wait daemonset/intel-tdx-dcap-qgs \
     -n "$QGS_NAMESPACE" --for=create --timeout="${TIMEOUT}s"
-kubectl rollout status daemonset/intel-tdx-dcap-qgs \
-    -n "$QGS_NAMESPACE" --timeout="${TIMEOUT}s"
 
 # ---------------------------------------------------------------------------
 # 6. Collect platform-data secrets (one per worker node, created by platform-registration)
 # ---------------------------------------------------------------------------
 
-PLATFORM_DATA_SECRETS=$(kubectl get secrets -n "$QGS_NAMESPACE" \
-    -l type=platform-data -o jsonpath='{.items[*].metadata.name}')
-log "Platform-data secrets: $PLATFORM_DATA_SECRETS"
+# Poll until all NUM_WORKERS platform-data secrets appear; the readinessProbe
+# on pck-certs-watcher blocks pods from becoming Ready until PCK secrets exist,
+# so we must write those secrets before waiting for rollout.
+log "Waiting for $NUM_WORKERS platform-data secrets"
+_deadline=$(( $(date +%s) + TIMEOUT ))
+while true; do
+    PLATFORM_DATA_SECRETS=$(kubectl get secrets -n "$QGS_NAMESPACE" \
+        -l type=platform-data -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)
+    _count=$(echo "$PLATFORM_DATA_SECRETS" | wc -w)
+    [[ "$_count" -ge "$NUM_WORKERS" ]] && break
+    [[ "$(date +%s)" -gt "$_deadline" ]] && fail "Only ${_count}/${NUM_WORKERS} platform-data secrets appeared within ${TIMEOUT}s"
+    sleep 3
+done
+log "Platform-data secrets (${_count}): $PLATFORM_DATA_SECRETS"
 
 # ---------------------------------------------------------------------------
 # 7. Write fake PCK cache secret for each platform-data secret
@@ -206,13 +215,13 @@ done
 # 8. Verify cert files are available in the tdx-qgs container of each QGS pod
 # ---------------------------------------------------------------------------
 
+log "Waiting for QGS rollout to complete"
+kubectl rollout status daemonset/intel-tdx-dcap-qgs \
+    -n "$QGS_NAMESPACE" --timeout="${TIMEOUT}s"
+
+# Capture pod names after rollout completes so they are current.
 QGS_PODS=$(kubectl get pods -n "$QGS_NAMESPACE" -l app=intel-tdx-qgs \
     -o jsonpath='{.items[*].metadata.name}')
-
-# Wait for all pods to be Ready after pck-certs-watcher processes the -pck secrets.
-# shellcheck disable=SC2086
-kubectl wait pod $QGS_PODS \
-    -n "$QGS_NAMESPACE" --for=condition=Ready --timeout="${TIMEOUT}s"
 
 for POD in $QGS_PODS; do
     # Verify certs are visible in the QGS container via the shared dcap-qcnl-cache volume.
