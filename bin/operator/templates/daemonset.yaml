@@ -98,7 +98,7 @@ spec:
         volumeMounts:
         - name: dcap-qcnl-cache
           mountPath: /run/dcap/cache/
-        readinessProbe:
+        startupProbe:
           exec:
             command:
             - pck-cert-tool
@@ -106,6 +106,7 @@ spec:
             - cache-ready
             - /run/dcap/cache/.dcap-qcnl
           periodSeconds: 10
+          failureThreshold: 2147483647
       containers:
       - name: tdx-qgs
         image: intel-tdx-qgs:latest
