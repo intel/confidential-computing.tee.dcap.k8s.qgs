@@ -8,7 +8,7 @@ use crate::cache::build_cache_blob;
 use crate::pcs_client::{PckCertsRequest, fetch_pck_certs, fetch_tcb_info};
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::Secret;
 use kube::{
@@ -85,6 +85,8 @@ enum Commands {
     GetCertificates(GetCertificatesArgs),
     /// Watch platform-data secrets and register them with Intel PCS to get PCK certificates
     Register(RegisterArgs),
+    /// Readiness/liveness probe helpers (exit 0 = ok, 1 = not ok)
+    Probe(ProbeArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -122,6 +124,26 @@ struct RegisterArgs {
     /// Kubernetes namespace (default: default)
     #[arg(short, long, default_value = "default")]
     namespace: String,
+}
+
+#[derive(Parser, Debug)]
+struct ProbeArgs {
+    #[command(subcommand)]
+    command: ProbeCommands,
+}
+
+#[derive(Subcommand, Debug)]
+enum ProbeCommands {
+    /// Check whether a directory is non-empty; used as a readiness probe to gate tdx-qgs startup
+    CacheReady(ProbePathArgs),
+    /// Connect to a Unix socket; used as a liveness probe for tdx-qgs
+    CheckSocket(ProbePathArgs),
+}
+
+#[derive(Parser, Debug)]
+struct ProbePathArgs {
+    /// Path to check
+    path: PathBuf,
 }
 
 fn copy_fixed_hex_field<const N: usize>(value: &str, field: &str) -> Result<[u8; N]> {
@@ -1017,6 +1039,30 @@ async fn main() -> Result<()> {
             });
             register_platforms(api_key.as_deref(), &reg_args.namespace).await?;
         }
+        Commands::Probe(probe_args) => match probe_args.command {
+            ProbeCommands::CacheReady(args) => {
+                let populated = fs::read_dir(&args.path)
+                    .ok()
+                    .and_then(|mut entries| entries.next())
+                    .is_some();
+                if !populated {
+                    eprintln!(
+                        "cache-ready: {} is empty or does not exist",
+                        args.path.display()
+                    );
+                    std::process::exit(1);
+                }
+            }
+            ProbeCommands::CheckSocket(args) => {
+                if let Err(e) = std::os::unix::net::UnixStream::connect(&args.path) {
+                    eprintln!(
+                        "check-socket: cannot connect to {}: {e}",
+                        args.path.display()
+                    );
+                    std::process::exit(1);
+                }
+            }
+        },
     }
 
     Ok(())
