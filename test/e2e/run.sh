@@ -164,11 +164,11 @@ kubectl apply -f "$SCRIPT_DIR/node-feature-rule.yaml"
 log "Deploying intel-tdx-dcap-operator"
 kubectl apply -k "$REPO_ROOT/bin/operator/deployment/default"
 
-# INTEL_TDX_QGS_SHA256 overrides the image for all DaemonSet containers
+# RELATED_IMAGE_QGS overrides the image for all DaemonSet containers
 # (platform-registration initContainer, pck-certs-watcher sidecar, tdx-qgs).
 kubectl set env deployment/intel-tdx-dcap-controller-manager \
     -n "$OPERATOR_NAMESPACE" \
-    INTEL_TDX_QGS_SHA256=intel-tdx-qgs-test:latest
+    RELATED_IMAGE_QGS=intel-tdx-qgs-test:latest
 
 kubectl rollout status deployment/intel-tdx-dcap-controller-manager \
     -n "$OPERATOR_NAMESPACE" --timeout="${TIMEOUT}s"

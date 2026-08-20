@@ -388,7 +388,7 @@ async fn create_or_update_daemonset(
         pod_spec.node_selector = Some(parse_node_selectors(&strings)?);
     }
 
-    // Override all container images from INTEL_TDX_QGS_SHA256 env if set
+    // Override all container images from RELATED_IMAGE_QGS env if set
     if let Some(image) = image_from_env() {
         for c in pod_spec.containers.iter_mut() {
             c.image = Some(image.clone());
@@ -488,7 +488,7 @@ async fn create_or_update_deployment(
         }
     }
 
-    // Override container image from INTEL_TDX_QGS_SHA256 env if set
+    // Override container image from RELATED_IMAGE_QGS env if set
     if let Some(image) = image_from_env() {
         container.image = Some(image);
     }
@@ -505,10 +505,10 @@ async fn create_or_update_deployment(
     Ok(deployment_name)
 }
 
-/// Returns the container image to use, derived from INTEL_TDX_QGS_SHA256 if set.
-/// The value should be a full image reference, e.g. "registry.example.com/pck-cert-tool@sha256:abc123".
+/// Returns the operand QGS image to use. Follows the OLM RELATED_IMAGE_* convention
+/// so operator-sdk automatically includes it in relatedImages when generating the bundle.
 fn image_from_env() -> Option<String> {
-    std::env::var("INTEL_TDX_QGS_SHA256").ok()
+    std::env::var("RELATED_IMAGE_QGS").ok()
 }
 
 /// Delete deployment if it exists

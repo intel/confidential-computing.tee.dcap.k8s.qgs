@@ -1,0 +1,12 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: intel-tdx-dcap-controller-manager
+spec:
+  template:
+    spec:
+      containers:
+      - name: operator
+        env:
+        - name: RELATED_IMAGE_QGS
+          value: "INTEL_TDX_QGS_IMAGE_PLACEHOLDER"
