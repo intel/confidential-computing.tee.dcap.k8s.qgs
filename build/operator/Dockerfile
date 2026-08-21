@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-FROM rust:trixie@sha256:b1b3c9c0d921d7fa0a6d1f9ec7e4eab87f8c8ec97644c3d791450f131dec813f AS builder
+FROM rust:1.98.0-slim-trixie@sha256:468a63c85b23350aa7971c0c8c2fec9dd1e501ef9f95d62b2688409a8b2cace1 AS builder
 
 # Install musl target for static linking
 RUN rustup target add x86_64-unknown-linux-musl

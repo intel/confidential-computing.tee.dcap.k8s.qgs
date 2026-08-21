@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-FROM debian:13@sha256:34cd9e9fd437c0a095ec39cb2e73422c9f30821b0d0848ed74fd0d43bae4d958 AS builder
+FROM rust:1.98.0-slim-trixie@sha256:468a63c85b23350aa7971c0c8c2fec9dd1e501ef9f95d62b2688409a8b2cace1 AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -25,10 +25,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsgx-headers \
     libsgx-urts \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Copy source code
 WORKDIR /build
