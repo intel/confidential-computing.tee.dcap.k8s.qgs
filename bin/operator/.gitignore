@@ -18,3 +18,7 @@ kubeconfig.yaml
 # Local development
 .local/
 tmp/
+
+# Generated bundle artifacts and templated patches
+deployment/manifests/patches/qgs-env.yaml
+deployment/manifests/kustomization.yaml.bak

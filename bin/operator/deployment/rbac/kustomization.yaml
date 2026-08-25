@@ -6,3 +6,6 @@ resources:
 - cluster_role_binding.yaml
 - role.yaml
 - role_binding.yaml
+- intel-tdx-dcap-serviceaccount.yaml
+- intel-tdx-dcap-role.yaml
+- intel-tdx-dcap-role-binding.yaml

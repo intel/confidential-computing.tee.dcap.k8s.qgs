@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: intel-tdx-dcap-qgs-scc-privileged
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: scc-privileged
+subjects:
+- kind: ServiceAccount
+  name: intel-tdx-dcap-qgs
+  namespace: intel-dcap-operator-system

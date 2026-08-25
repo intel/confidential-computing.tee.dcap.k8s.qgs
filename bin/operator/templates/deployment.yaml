@@ -12,7 +12,7 @@ spec:
       labels:
         app: intel-tdx-registrar
     spec:
-      serviceAccountName: pck-cert-tool
+      serviceAccountName: intel-tdx-dcap-qgs
       securityContext:
         seccompProfile:
           type: RuntimeDefault

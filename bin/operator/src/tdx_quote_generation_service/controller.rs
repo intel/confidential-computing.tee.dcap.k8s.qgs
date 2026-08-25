@@ -14,8 +14,7 @@ use std::time::Duration;
 use chrono::Utc;
 use futures::StreamExt;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment};
-use k8s_openapi::api::core::v1::{EnvVar, EnvVarSource, SecretKeySelector, ServiceAccount};
-use k8s_openapi::api::rbac::v1::{PolicyRule, Role, RoleBinding, RoleRef, Subject};
+use k8s_openapi::api::core::v1::{EnvVar, EnvVarSource, SecretKeySelector};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
 use kube::{
     ResourceExt,
@@ -129,11 +128,6 @@ async fn reconcile_resource(
     // Get namespace from environment variable (operator runs in this namespace)
     let namespace = std::env::var("OPERATOR_NAMESPACE").unwrap_or_else(|_| "default".to_string());
     info!("Using namespace: {}", namespace);
-
-    // Create or update RBAC resources
-    create_or_update_service_account(ctx, resource, &namespace).await?;
-    create_or_update_role(ctx, resource, &namespace).await?;
-    create_or_update_role_binding(ctx, resource, &namespace).await?;
 
     // Create or update DaemonSet
     let daemonset_name = create_or_update_daemonset(ctx, resource, &namespace).await?;
@@ -278,7 +272,7 @@ async fn reconcile_resource(
 /// This is called when the resource has a deletion timestamp and we need
 /// to clean up any external resources before removing the finalizer.
 async fn cleanup_resource(resource: &TdxQuoteGenerationService, _ctx: &Context) -> Result<Action> {
-    // All resources (DaemonSet, Deployment, ServiceAccount, Role, RoleBinding) have
+    // All resources (DaemonSet, Deployment) have
     // ownerReferences set to this CR, so Kubernetes garbage collector will automatically
     // delete them when this CR is deleted. No manual cleanup needed.
 
@@ -308,117 +302,6 @@ fn create_owner_reference(resource: &TdxQuoteGenerationService) -> Result<OwnerR
         controller: Some(true),
         block_owner_deletion: Some(true),
     })
-}
-
-/// Create or update ServiceAccount
-async fn create_or_update_service_account(
-    ctx: &Context,
-    resource: &TdxQuoteGenerationService,
-    namespace: &str,
-) -> Result<()> {
-    let sa_api: Api<ServiceAccount> = Api::namespaced(ctx.client.clone(), namespace);
-    let resource_name = resource.name_any();
-
-    let sa = ServiceAccount {
-        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-            name: Some(resource_name.clone()),
-            namespace: Some(namespace.to_string()),
-            owner_references: Some(vec![create_owner_reference(resource)?]),
-            ..Default::default()
-        },
-        ..Default::default()
-    };
-
-    sa_api
-        .patch(
-            &resource_name,
-            &PatchParams::apply("tdx-qgs-operator"),
-            &Patch::Apply(&sa),
-        )
-        .await?;
-
-    Ok(())
-}
-
-/// Create or update Role
-async fn create_or_update_role(
-    ctx: &Context,
-    resource: &TdxQuoteGenerationService,
-    namespace: &str,
-) -> Result<()> {
-    let role_api: Api<Role> = Api::namespaced(ctx.client.clone(), namespace);
-    let resource_name = resource.name_any();
-
-    let role = Role {
-        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-            name: Some(resource_name.clone()),
-            namespace: Some(namespace.to_string()),
-            owner_references: Some(vec![create_owner_reference(resource)?]),
-            ..Default::default()
-        },
-        rules: Some(vec![PolicyRule {
-            api_groups: Some(vec!["".to_string()]),
-            resources: Some(vec!["secrets".to_string()]),
-            verbs: vec![
-                "get".to_string(),
-                "create".to_string(),
-                "list".to_string(),
-                "patch".to_string(),
-                "watch".to_string(),
-            ],
-            ..Default::default()
-        }]),
-    };
-
-    role_api
-        .patch(
-            &resource_name,
-            &PatchParams::apply("tdx-qgs-operator"),
-            &Patch::Apply(&role),
-        )
-        .await?;
-
-    Ok(())
-}
-
-/// Create or update RoleBinding
-async fn create_or_update_role_binding(
-    ctx: &Context,
-    resource: &TdxQuoteGenerationService,
-    namespace: &str,
-) -> Result<()> {
-    let rb_api: Api<RoleBinding> = Api::namespaced(ctx.client.clone(), namespace);
-    let resource_name = resource.name_any();
-
-    let rb = RoleBinding {
-        metadata: k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta {
-            name: Some(resource_name.clone()),
-            namespace: Some(namespace.to_string()),
-            owner_references: Some(vec![create_owner_reference(resource)?]),
-            ..Default::default()
-        },
-        subjects: Some(vec![Subject {
-            kind: "ServiceAccount".to_string(),
-            name: resource_name.clone(),
-            namespace: Some(namespace.to_string()),
-            ..Default::default()
-        }]),
-        role_ref: RoleRef {
-            api_group: Some("rbac.authorization.k8s.io".to_string()),
-            kind: "Role".to_string(),
-            name: resource_name.clone(),
-        },
-    };
-
-    rb_api
-        .patch(
-            &resource_name,
-            &PatchParams::apply("tdx-qgs-operator"),
-            &Patch::Apply(&rb),
-        )
-        .await?;
-
-    Ok(())
 }
 
 /// Parse node selector strings in "key=value" format into a BTreeMap
@@ -477,8 +360,9 @@ async fn create_or_update_daemonset(
         .and_then(|s| s.template.spec.as_mut())
         .ok_or_else(|| Error::Generic("DaemonSet template missing pod spec".to_string()))?;
 
-    // Set the service account name to the CR resource name
-    pod_spec.service_account_name = Some(resource.name_any());
+    pod_spec.service_account_name = Some(
+        std::env::var("QGS_SERVICE_ACCOUNT").unwrap_or_else(|_| "intel-tdx-dcap-qgs".to_string()),
+    );
 
     // Remove platform-registration initContainer and efivars volume for External mode
     if matches!(
@@ -504,7 +388,7 @@ async fn create_or_update_daemonset(
         pod_spec.node_selector = Some(parse_node_selectors(&strings)?);
     }
 
-    // Override all container images from INTEL_TDX_QGS_SHA256 env if set
+    // Override all container images from RELATED_IMAGE_QGS env if set
     if let Some(image) = image_from_env() {
         for c in pod_spec.containers.iter_mut() {
             c.image = Some(image.clone());
@@ -553,8 +437,9 @@ async fn create_or_update_deployment(
         .and_then(|s| s.template.spec.as_mut())
         .ok_or_else(|| Error::Generic("Deployment template missing pod spec".to_string()))?;
 
-    // Set the service account name to the CR resource name
-    pod_spec.service_account_name = Some(resource.name_any());
+    pod_spec.service_account_name = Some(
+        std::env::var("QGS_SERVICE_ACCOUNT").unwrap_or_else(|_| "intel-tdx-dcap-qgs".to_string()),
+    );
 
     // Get the container
     let container = pod_spec
@@ -603,7 +488,7 @@ async fn create_or_update_deployment(
         }
     }
 
-    // Override container image from INTEL_TDX_QGS_SHA256 env if set
+    // Override container image from RELATED_IMAGE_QGS env if set
     if let Some(image) = image_from_env() {
         container.image = Some(image);
     }
@@ -620,10 +505,10 @@ async fn create_or_update_deployment(
     Ok(deployment_name)
 }
 
-/// Returns the container image to use, derived from INTEL_TDX_QGS_SHA256 if set.
-/// The value should be a full image reference, e.g. "registry.example.com/pck-cert-tool@sha256:abc123".
+/// Returns the operand QGS image to use. Follows the OLM RELATED_IMAGE_* convention
+/// so operator-sdk automatically includes it in relatedImages when generating the bundle.
 fn image_from_env() -> Option<String> {
-    std::env::var("INTEL_TDX_QGS_SHA256").ok()
+    std::env::var("RELATED_IMAGE_QGS").ok()
 }
 
 /// Delete deployment if it exists

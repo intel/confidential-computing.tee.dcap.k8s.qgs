@@ -3,7 +3,14 @@ kind: ClusterServiceVersion
 metadata:
   annotations:
     alm-examples: '[]'
-    capabilities: Basic Install
+    capabilities: Seamless Upgrades
+    features.operators.openshift.io/disconnected: "true"
+    features.operators.openshift.io/fips-compliant: "false"
+    features.operators.openshift.io/proxy-aware: "false"
+    features.operators.openshift.io/tls-profiles: "false"
+    features.operators.openshift.io/token-auth-aws: "false"
+    features.operators.openshift.io/token-auth-azure: "false"
+    features.operators.openshift.io/token-auth-gcp: "false"
   name: intel-tdx-dcap-operator.v0.0.0
   namespace: placeholder
 spec:
@@ -33,8 +40,8 @@ spec:
   - coco
   - dcap
   links:
-  - name: Operator
-    url: https://operator.domain
+  - name: Intel TDX DCAP Operator
+    url: https://github.com/intel/confidential-computing.tee.dcap.k8s.qgs
   maintainers:
   - email: mikko.ylinen@intel.com
     name: Mikko Ylinen

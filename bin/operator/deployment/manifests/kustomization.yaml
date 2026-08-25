@@ -1,5 +1,12 @@
 resources:
 - ../default
 - ../samples
-- scc-privileged.yaml
 - bases/intel-tdx-dcap-operator.clusterserviceversion.yaml
+- scc-clusterrole.yaml
+- scc-clusterrolebinding.yaml
+
+patches:
+- path: patches/qgs-env.yaml
+  target:
+    kind: Deployment
+    name: intel-tdx-dcap-controller-manager

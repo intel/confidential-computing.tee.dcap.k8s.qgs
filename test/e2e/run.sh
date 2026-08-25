@@ -164,11 +164,11 @@ kubectl apply -f "$SCRIPT_DIR/node-feature-rule.yaml"
 log "Deploying intel-tdx-dcap-operator"
 kubectl apply -k "$REPO_ROOT/bin/operator/deployment/default"
 
-# INTEL_TDX_QGS_SHA256 overrides the image for all DaemonSet containers
+# RELATED_IMAGE_QGS overrides the image for all DaemonSet containers
 # (platform-registration initContainer, pck-certs-watcher sidecar, tdx-qgs).
 kubectl set env deployment/intel-tdx-dcap-controller-manager \
     -n "$OPERATOR_NAMESPACE" \
-    INTEL_TDX_QGS_SHA256=intel-tdx-qgs-test:latest
+    RELATED_IMAGE_QGS=intel-tdx-qgs-test:latest
 
 kubectl rollout status deployment/intel-tdx-dcap-controller-manager \
     -n "$OPERATOR_NAMESPACE" --timeout="${TIMEOUT}s"
@@ -198,6 +198,25 @@ while true; do
     sleep 3
 done
 log "Platform-data secrets (${_count}): $PLATFORM_DATA_SECRETS"
+
+# ---------------------------------------------------------------------------
+# 7a. Verify tdx-qgs is still Waiting (startupProbe gate is holding)
+# ---------------------------------------------------------------------------
+
+log "Verifying tdx-qgs is blocked by pck-certs-watcher startupProbe"
+_any_pod=$(kubectl get pods -n "$QGS_NAMESPACE" -l app=intel-tdx-qgs \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+if [[ -n "$_any_pod" ]]; then
+    _qgs_state=$(kubectl get pod "$_any_pod" -n "$QGS_NAMESPACE" \
+        -o jsonpath='{.status.containerStatuses[?(@.name=="tdx-qgs")].state}' 2>/dev/null || true)
+    _sidecar_started=$(kubectl get pod "$_any_pod" -n "$QGS_NAMESPACE" \
+        -o jsonpath='{.status.initContainerStatuses[?(@.name=="pck-certs-watcher")].started}' 2>/dev/null || true)
+    log "pck-certs-watcher started=${_sidecar_started}, tdx-qgs state=${_qgs_state}"
+    [[ "$_sidecar_started" == "false" ]] || \
+        log "WARN: pck-certs-watcher already started before PCK secrets created"
+    echo "$_qgs_state" | grep -q "waiting" || \
+        log "WARN: tdx-qgs is not in Waiting state before PCK secrets created"
+fi
 
 # ---------------------------------------------------------------------------
 # 7. Write fake PCK cache secret for each platform-data secret
