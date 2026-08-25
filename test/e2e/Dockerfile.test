@@ -4,12 +4,12 @@
 #   - fake get_platform_info binary (fixed JSON, no SGX hardware needed)
 #   - busybox static binary for kubectl-exec-based test verification
 
-FROM rust:slim-bookworm AS fake-builder
+FROM rust:1.98.0-slim-trixie@sha256:468a63c85b23350aa7971c0c8c2fec9dd1e501ef9f95d62b2688409a8b2cace1 AS fake-builder
 WORKDIR /src
 COPY test/fake-platform-info/ .
 RUN cargo build --release
 
-FROM busybox:stable-musl AS busybox-stage
+FROM busybox:stable-musl@sha256:3c6ae8008e2c2eedd141725c30b20d9c36b026eb796688f88205845ef17aa213 AS busybox-stage
 
 FROM intel-tdx-qgs:latest
 COPY --from=fake-builder /src/target/release/fake-platform-info /usr/local/bin/get_platform_info

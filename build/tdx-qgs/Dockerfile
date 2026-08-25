@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-FROM debian:13@sha256:34cd9e9fd437c0a095ec39cb2e73422c9f30821b0d0848ed74fd0d43bae4d958 AS builder
+FROM rust:1.98.0-slim-trixie@sha256:468a63c85b23350aa7971c0c8c2fec9dd1e501ef9f95d62b2688409a8b2cace1 AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -10,6 +10,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
     ca-certificates \
+    gnupg \
     && rm -rf /var/lib/apt/lists/*
 
 ARG DCAP_TARBALL_SHA256="977d652e6efa2fcb6ec7763db08ae5bbb6be8948c3aec55642832b5a940e9a74"
@@ -18,17 +19,16 @@ ARG DCAP_TARBALL_SHA256="977d652e6efa2fcb6ec7763db08ae5bbb6be8948c3aec55642832b5
 RUN curl -fsSL https://download.01.org/intel-sgx/sgx-dcap/1.27/linux/distro/Debian13/sgx_debian_local_repo.tgz -o sgx_debian_local_repo.tgz \
     && echo "$DCAP_TARBALL_SHA256 sgx_debian_local_repo.tgz" | sha256sum -c - \
     && tar xzf sgx_debian_local_repo.tgz \
-    && echo "deb [trusted=yes arch=amd64] file:/sgx_debian_local_repo trixie main" > /etc/apt/sources.list.d/intel-sgx.list
+    && mkdir -p /etc/apt/keyrings \
+    && gpg --dearmor < /sgx_debian_local_repo/keys/intel-sgx.key \
+         > /etc/apt/keyrings/intel-sgx.gpg \
+    && echo "deb [signed-by=/etc/apt/keyrings/intel-sgx.gpg arch=amd64] file:/sgx_debian_local_repo trixie main" > /etc/apt/sources.list.d/intel-sgx.list
 
 # Install SGX development packages
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libsgx-headers \
     libsgx-urts \
     && rm -rf /var/lib/apt/lists/*
-
-# Install Rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Copy source code
 WORKDIR /build
