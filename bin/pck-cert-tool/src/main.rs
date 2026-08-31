@@ -698,13 +698,16 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
     info!("Watching for platform-data secrets");
 
     // Track spawned tasks for graceful shutdown
-    let mut tasks = Vec::new();
+    let mut tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     // Set up signal handler for graceful shutdown
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
     // Watch for changes until SIGTERM
     loop {
+        // Prune finished tasks to prevent unbounded growth of the task list
+        tasks.retain(|handle: &tokio::task::JoinHandle<()>| !handle.is_finished());
+
         tokio::select! {
             result = watch_stream.next() => {
                 match result {
