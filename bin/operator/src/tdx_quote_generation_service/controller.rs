@@ -271,13 +271,31 @@ async fn reconcile_resource(
 ///
 /// This is called when the resource has a deletion timestamp and we need
 /// to clean up any external resources before removing the finalizer.
-async fn cleanup_resource(resource: &TdxQuoteGenerationService, _ctx: &Context) -> Result<Action> {
-    // All resources (DaemonSet, Deployment) have
-    // ownerReferences set to this CR, so Kubernetes garbage collector will automatically
-    // delete them when this CR is deleted. No manual cleanup needed.
+async fn cleanup_resource(resource: &TdxQuoteGenerationService, ctx: &Context) -> Result<Action> {
+    let namespace = std::env::var("OPERATOR_NAMESPACE").unwrap_or_else(|_| "default".to_string());
+    info!(
+        "Cleaning up resources for TdxQuoteGenerationService {} in namespace {}",
+        resource.name_any(),
+        namespace
+    );
+
+    // Delete DaemonSet
+    let ds_api: Api<DaemonSet> = Api::namespaced(ctx.client.clone(), &namespace);
+    let daemonset_name = format!("{}-qgs", resource.name_any());
+    if let Err(e) = ds_api.delete(&daemonset_name, &Default::default()).await {
+        if !is_not_found(&e) {
+            error!("Failed to delete DaemonSet {}: {}", daemonset_name, e);
+            return Err(Error::Kube(e));
+        }
+    } else {
+        info!("Deleted DaemonSet {}", daemonset_name);
+    }
+
+    // Delete Deployment if it exists
+    delete_deployment_if_exists(ctx, resource, &namespace).await?;
 
     info!(
-        "Cleanup completed for TdxQuoteGenerationService {} (resources will be garbage collected by Kubernetes)",
+        "Cleanup completed for TdxQuoteGenerationService {}",
         resource.name_any()
     );
     Ok(Action::await_change())

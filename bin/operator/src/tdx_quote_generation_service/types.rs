@@ -18,6 +18,7 @@ use super::status::{Condition, ConditionManager};
     plural = "tdxquotegenerationservices",
     singular = "tdx-quote-generation-service",
     shortname = "tqgs",
+    scope = "Cluster",
     label("app.kubernetes.io/name", "tdx_quote_generation_service"),
     label("app.kubernetes.io/managed-by", "operator"),
     status = "TdxQuoteGenerationServiceStatus",

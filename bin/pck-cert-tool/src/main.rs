@@ -736,6 +736,7 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
                             }
                         });
 
+                        tasks.retain(|h| !h.is_finished());
                         tasks.push(handle);
                     }
                     Some(Err(e)) => {
