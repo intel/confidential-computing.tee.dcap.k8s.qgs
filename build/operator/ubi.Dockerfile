@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-FROM registry.access.redhat.com/ubi10/ubi:latest@sha256:9d3b5102e7ae4f82914a1791610b75acef134b93158be6005b6ae9218c163550 AS builder
+FROM registry.access.redhat.com/ubi10/ubi:latest@sha256:bc5a42833e4c84dbf7a29bcd4a0be414addad69e16210c2f0eb73986b356793c AS builder
 
 # gcc is needed by the ring crate (C assembly)
 RUN dnf install -y \
@@ -25,7 +25,7 @@ COPY bin/pck-cert-tool/src bin/pck-cert-tool/src
 RUN cargo build --release -p operator
 
 # Final stage — ubi-micro; operator uses rustls/ring so only needs glibc
-FROM registry.access.redhat.com/ubi10/ubi-micro:latest@sha256:cabedb588644e9da2c95ebb173a67b78d58aaedcb0eaa42a86f880bcef8a0b2f
+FROM registry.access.redhat.com/ubi10/ubi-micro:latest@sha256:37fadb004c6bea628fcdd81376c8fb77bd8d9fd432d90503af4d9e76b1ff7191
 
 COPY --from=builder /build/target/release/operator /operator
 COPY LICENSE /licenses/LICENSE

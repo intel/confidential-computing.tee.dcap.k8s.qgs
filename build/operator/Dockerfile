@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-FROM rust:1.98.0-slim-trixie@sha256:468a63c85b23350aa7971c0c8c2fec9dd1e501ef9f95d62b2688409a8b2cace1 AS builder
+FROM rust:1.98.0-slim-trixie@sha256:17d1ba895198f9934c6314ec5346a0d5115372f3243390c3d731e242f35c2f27 AS builder
 
 # Install musl target for static linking
 RUN rustup target add x86_64-unknown-linux-musl
@@ -27,7 +27,7 @@ COPY bin/pck-cert-tool/src bin/pck-cert-tool/src
 RUN cargo build --release --target x86_64-unknown-linux-musl -p operator
 
 # Final stage - use distroless
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:f7f8f729987ad0fdf6b05eeeae94b26e6a0f613bdf46feea7fc40f7bd72953e6
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:1c2c046bc09ed40fad370b599a0b1ae7987f55b01e247cf27a7c27cd97e5bbc7
 
 # Copy the static binary from builder
 COPY --from=builder /build/target/x86_64-unknown-linux-musl/release/operator /operator
