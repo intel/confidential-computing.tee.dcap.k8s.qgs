@@ -91,6 +91,7 @@ RUN lib=/usr/lib64 \
              /rootfs${lib}/ \
     && cp -a /opt/intel/tdx-qgs /rootfs/opt/intel/ \
     && cp /etc/qgs.conf /rootfs/etc/ \
+    && echo '{"local_cache_only": true}' > /rootfs/opt/intel/tdx-qgs/qcnl.conf \
     && rpm -qa --queryformat '%{NAME}\n' \
          > /rootfs/usr/local/share/pck-cert-tool/added-packages.txt \
     && cp /build/bin/get-platform-info/get_platform_info /rootfs/usr/local/bin/ \
@@ -102,6 +103,10 @@ COPY LICENSE /rootfs/licenses/LICENSE
 FROM registry.access.redhat.com/ubi10/ubi-minimal:latest@sha256:d28951a21182cbc821da281af307a4d583dbc39d464680adc6fdffbc5a935b20
 
 COPY --from=builder /rootfs/ /
+
+# QCNL local caching is the only supported mode: this image ships without curl/libcurl,
+# so the QCNL library can never reach out to a remote PCCS.
+ENV QCNL_CONF_PATH=/opt/intel/tdx-qgs/qcnl.conf
 
 # Run as nobody
 USER nobody

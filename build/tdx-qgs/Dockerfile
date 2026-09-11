@@ -77,6 +77,7 @@ RUN dpkg-query -W -f='${Package}\n' > /tmp/base-pkglist.txt \
              ${lib}/libboost_thread.so.* \
              /rootfs${lib}/ \
     && cp -a /opt/intel/tdx-qgs /rootfs/opt/intel/ \
+    && echo '{"local_cache_only": true}' > /rootfs/opt/intel/tdx-qgs/qcnl.conf \
     && grep -Fxvf /tmp/base-pkglist.txt /tmp/final-pkglist.txt \
          > /rootfs/usr/local/share/pck-cert-tool/added-packages.txt \
     && rm /tmp/base-pkglist.txt /tmp/final-pkglist.txt \
@@ -89,6 +90,10 @@ COPY LICENSE /rootfs/usr/local/share/pck-cert-tool/LICENSE
 FROM gcr.io/distroless/cc-debian13@sha256:9b615fff20e1a4fad29c2b30562580b212c7dd5e2225236735cca0070ed11c78
 
 COPY --from=builder /rootfs/ /
+
+# QCNL local caching is the only supported mode: this image ships without curl/libcurl,
+# so the QCNL library can never reach out to a remote PCCS.
+ENV QCNL_CONF_PATH=/opt/intel/tdx-qgs/qcnl.conf
 
 # Run as nobody (uid 65534); distroless has no named users so use numeric UID
 USER 65534:65534

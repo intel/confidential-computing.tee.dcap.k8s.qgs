@@ -8,8 +8,6 @@ spec:
       app: intel-tdx-qgs
   template:
     metadata:
-      annotations:
-        qcnl-conf: '{"local_cache_only": true}'
       labels:
         app: intel-tdx-qgs
     spec:
@@ -133,8 +131,6 @@ spec:
             sgx.intel.com/provision: 1
         imagePullPolicy: IfNotPresent
         env:
-        - name: QCNL_CONF_PATH
-          value: "/run/dcap/qcnl_conf"
         - name: XDG_CACHE_HOME
           value: "/run/dcap/cache"
         startupProbe:
@@ -160,9 +156,6 @@ spec:
           readOnly: true
         - name: qgs-socket
           mountPath: /var/run/tdx-qgs
-        - name: qcnl-config
-          mountPath: /run/dcap/
-          readOnly: true
       volumes:
       - name: dcap-qcnl-cache
         emptyDir:
@@ -172,12 +165,6 @@ spec:
         hostPath:
           path: /var/run/tdx-qgs
           type: DirectoryOrCreate
-      - name: qcnl-config
-        downwardAPI:
-          items:
-          - path: "qcnl_conf"
-            fieldRef:
-              fieldPath: metadata.annotations['qcnl-conf']
       - name: efivars
         hostPath:
           path: /sys/firmware/efi/efivars/
