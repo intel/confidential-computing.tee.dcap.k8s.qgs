@@ -6,9 +6,7 @@ FROM rust:1.98.0-slim-trixie@sha256:17d1ba895198f9934c6314ec5346a0d5115372f32433
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    build-essential \
-    pkg-config \
-    libssl-dev \
+    make \
     ca-certificates \
     gnupg \
     && rm -rf /var/lib/apt/lists/*
