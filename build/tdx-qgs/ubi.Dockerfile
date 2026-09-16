@@ -50,8 +50,13 @@ ARG RUST_VERSION="1.98.0"
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${RUST_VERSION}
 ENV PATH="/root/.cargo/bin:${PATH}"
 
+# cargo-about generates a third-party license/copyright notices report for the
+# Rust dependency tree. Installed early so this layer is cached independent of
+# source code changes.
+RUN cargo install cargo-about --locked --features cli
+
 WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock about.toml about.hbs ./
 COPY bin/operator/Cargo.toml bin/operator/Cargo.toml
 COPY bin/operator/src bin/operator/src
 COPY bin/pck-cert-tool/Cargo.toml bin/pck-cert-tool/Cargo.toml
@@ -68,6 +73,13 @@ RUN make -C bin/get-platform-info clean && \
 
 RUN cargo build --release -p pck-cert-tool \
     && chmod +x target/release/pck-cert-tool
+
+# Generate third-party license/copyright notices for pck-cert-tool's dependency tree
+RUN mkdir -p /rootfs/licenses \
+    && cargo about generate about.hbs \
+         --target x86_64-unknown-linux-gnu \
+         -o /rootfs/licenses/THIRD-PARTY-LICENSES.html \
+         --manifest-path bin/pck-cert-tool/Cargo.toml
 
 # Assemble /rootfs for the final stage
 RUN lib=/usr/lib64 \
