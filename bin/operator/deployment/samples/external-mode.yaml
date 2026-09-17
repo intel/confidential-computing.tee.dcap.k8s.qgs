@@ -7,7 +7,7 @@
 # - No registrar Deployment is created
 # - No platform-registration initContainer is created
 # - No efivars volume is mounted
-# - Platform data secrets must be created externally before QGS pods start
+# - Platform data secrets must be created externally before QGS pods start, named <node-name>-pck
 # - Secrets should be labeled with fmspc=<value> for discovery
 #
 # This mode is useful when:
@@ -16,7 +16,7 @@
 # - You want to decouple platform registration from QGS pod lifecycle
 #
 # Prerequisites:
-# 1. Externally create PCK certificate secrets for each platform
+# 1. Externally create PCK certificate secrets for each platform, named <node-name>-pck
 # 2. Ensure secrets are labeled: fmspc=<value>
 # 3. Ensure nodes are labeled with SGX capability:
 #    kubectl label nodes <node-name> intel.feature.node.kubernetes.io/sgx=true
