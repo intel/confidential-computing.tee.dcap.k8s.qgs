@@ -14,6 +14,9 @@ Get platform data and create Kubernetes secrets with platform manifest data.
 - Calls external platform info binary to get SGX platform information (CPU SVN, encrypted PPID, PCE ID, PCE SVN, QE ID)
 - Creates or updates Kubernetes secrets with platform data
 - Labels secrets with `type=platform-data` for easy identification
+- Optionally writes the ID (a QE ID) to a plain-text file (`--id-file`) on a volume shared with
+  the `pck-certs-watcher` container, so that container doesn't need SGX enclave/device access
+  itself (see [Sharing the ID with get-certificates](#sharing-the-id-with-get-certificates))
 
 ### register
 
@@ -43,8 +46,11 @@ Get PCK certificates from a Kubernetes secret and write to a file, continuously 
 
 #### Features
 
-- Reads a secret named `<qe_id>-pck` (where qe_id is obtained from the platform info binary)
-- Writes certificate data to `<output_dir>/<qe_id>_0000`
+- Reads a secret named `<id>-pck`, where `id` comes from either `--id-file` (a file containing
+  the real SGX QE ID) or `--id` (a literal value, e.g. `$(NODE_NAME)` in External mode) — see
+  [Sharing the ID with get-certificates](#sharing-the-id-with-get-certificates)
+- Writes certificate data to `<output_dir>/<cache_id>_0000`, where `cache_id` is the ID itself
+  for `--id-file`, or the reserved all-zero ID for `--id`
 - Watches the secret for updates and rewrites the file when changes occur
 - Continues running and watching until interrupted
 
@@ -120,26 +126,34 @@ Get PCK certificates from a Kubernetes secret and write to a file, watching for 
 Basic usage:
 
 ```bash
-./target/release/pck-cert-tool get-certificates --platform-info-binary /path/to/get-platform-info --output-dir /path/to/output
+./target/release/pck-cert-tool get-certificates --id-file /path/to/id --output-dir /path/to/output
 ```
 
 Specify a namespace:
 
 ```bash
-./target/release/pck-cert-tool get-certificates --platform-info-binary /path/to/get-platform-info --output-dir /path/to/output --namespace my-namespace
+./target/release/pck-cert-tool get-certificates --id-file /path/to/id --output-dir /path/to/output --namespace my-namespace
 ```
 
 Short options:
 
 ```bash
-./target/release/pck-cert-tool get-certificates -p /path/to/get-platform-info -o /path/to/output -n my-namespace
+./target/release/pck-cert-tool get-certificates -i /path/to/id -o /path/to/output -n my-namespace
+```
+
+Or, with a literal ID instead of a file (e.g. in External mode):
+
+```bash
+./target/release/pck-cert-tool get-certificates --id "$NODE_NAME" -o /path/to/output -n my-namespace
 ```
 
 The command will:
-1. Get the QE ID by calling the specified binary
-2. Look for a secret named `<qe_id>-pck` in the namespace
+1. Determine the ID, either by reading the given file (`--id-file`) or using the literal value
+   (`--id`)
+2. Look for a secret named `<id>-pck` in the namespace
 3. Extract the `certificate` field from the secret
-4. Write it to `<output_dir>/<qe_id>_0000`
+4. Write it to `<output_dir>/<cache_id>_0000`, where `cache_id` is the ID itself if it came from
+   `--id-file`, or the reserved all-zero ID if it came from `--id`
 5. Continue watching for updates to the secret
 6. Rewrite the file whenever the secret is updated
 
@@ -176,7 +190,7 @@ When the `register` command processes a platform-data secret, it creates a new s
 
 ```yaml
 metadata:
-  name: <qe_id>-pck
+  name: <id>-pck
   labels:
     fmspc: "<FMSPC value from SGX-FMSPC header>"
 data:
@@ -214,6 +228,24 @@ The `fmspc` label contains the Family-Model-Stepping-Platform-Custom SKU value r
 
 The platform info binary must output a single-line JSON string to stdout with fields `cpu_svn`, `enc_ppid`, `pce_id`, `pce_svn`, and `qe_id` (all hex strings), and exit with code 0 on success. See [bin/get-platform-info/README.md](../get-platform-info/README.md) for the reference implementation and full output specification.
 
+Calling this binary requires SGX enclave/device access (and typically root), since it loads and
+calls into the SGX ID and PCE enclaves.
+
+## Sharing the ID with get-certificates
+
+`get-certificates` only needs the ID (to know which `<id>-pck` secret to watch), so it takes it
+directly via `--id-file` or `--id` instead of calling the platform info binary.
+
+- `--id-file` reads the ID from a file and requires it to be the real 32-hex-character SGX QE
+  ID for this node, since it's also used to name the on-disk cache file (`<id>_0000`), which the
+  SGX DCAP Quote Provider Library looks up by the node's actual QE ID. `get-platforms` writes
+  this file (also via `--id-file`) onto a volume shared with `get-certificates`.
+- `--id` takes the ID as a literal value instead, for cases where there is no real per-node QE
+  ID to share (e.g. `$(NODE_NAME)` in External mode, where the operator passes it directly on
+  the command line). Since this value isn't guaranteed to be a real QE ID, the cache file is
+  always written under the reserved all-zero ID (`00000000000000000000000000000000`) instead,
+  while the secret is still looked up as `<id>-pck` using the literal value.
+
 ## Examples
 
 ### Complete Workflow Example
@@ -244,7 +276,7 @@ This watches for platform-data secrets and automatically:
 3. **Write certificates to filesystem:**
 
 ```bash
-./target/release/pck-cert-tool get-certificates -p /usr/local/bin/get_platform_info -o /var/lib/certs -n default
+./target/release/pck-cert-tool get-certificates -i /run/dcap/platform/id -o /var/lib/certs -n default
 ```
 
 This reads the `a1b2c3d4e5f6-pck` secret and writes `/var/lib/certs/a1b2c3d4e5f6_0000` (binary cache file compatible with SGX DCAP QPL).
@@ -282,10 +314,10 @@ The register service will:
 Running:
 
 ```bash
-./target/release/pck-cert-tool get-certificates -p /usr/local/bin/get_platform_info -o /var/lib/certs -n default
+./target/release/pck-cert-tool get-certificates -i /run/dcap/platform/id -o /var/lib/certs -n default
 ```
 
-If the QE ID is `a1b2c3d4e5f6`:
+If the ID (a QE ID) is `a1b2c3d4e5f6`:
 - Looks for secret named `a1b2c3d4e5f6-pck`
 - Writes binary cache file to `/var/lib/certs/a1b2c3d4e5f6_0000`
 - Watches for updates and rewrites the file when the secret changes

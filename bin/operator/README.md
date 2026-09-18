@@ -95,7 +95,8 @@ This mode:
 - Does not create registrar Deployment
 - Does not create platform-registration initContainer to collect platform manifest
 - Does not mount efivars volume
-- Requires PCK certificate secrets to be provisioned externally before QGS pods can sign quotes
+- Requires PCK certificate secrets to be provisioned externally before QGS pods can sign
+  quotes, named `<node-name>-pck`
 
 ## Common Operations
 

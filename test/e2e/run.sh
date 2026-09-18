@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# e2e test: operator in Offline mode on a 5-worker kind cluster without SGX hardware.
+# e2e test: operator on a multi-worker kind cluster without SGX hardware
+# (worker count is tunable via NUM_WORKERS, default 5).
 #
-# Each kind node gets a unique qe_id derived from NODE_NAME (Downward API).
-# The test dynamically discovers qe_ids from the created platform-data secrets,
-# writes fake -pck secrets, and verifies the certificate file is available in
-# the tdx-qgs container of every QGS pod.
+# Exercises Offline mode (platform-data secrets discovered dynamically, fake
+# -pck secrets written, cert files verified in every QGS pod), then deletes
+# the CR to verify the DaemonSet is garbage-collected, then exercises
+# External mode (fake <node-name>-pck secrets written directly, cert files
+# verified again).
 #
 # Prerequisites: kind, kubectl, docker
 #
@@ -50,7 +52,7 @@ cleanup() {
 trap cleanup EXIT
 
 # ---------------------------------------------------------------------------
-# 1. Create kind cluster (1 control-plane + 5 workers)
+# 1. Create kind cluster (1 control-plane + $NUM_WORKERS workers)
 # ---------------------------------------------------------------------------
 
 # Generate containerd proxy drop-in and kind cluster config.
@@ -238,18 +240,73 @@ log "Waiting for QGS rollout to complete"
 kubectl rollout status daemonset/intel-tdx-dcap-qgs \
     -n "$QGS_NAMESPACE" --timeout="${TIMEOUT}s"
 
-# Capture pod names after rollout completes so they are current.
-QGS_PODS=$(kubectl get pods -n "$QGS_NAMESPACE" -l app=intel-tdx-qgs \
-    -o jsonpath='{.items[*].metadata.name}')
+verify_certs_in_pods() {
+    # Capture pod names after rollout completes so they are current.
+    local pods
+    pods=$(kubectl get pods -n "$QGS_NAMESPACE" -l app=intel-tdx-qgs \
+        -o jsonpath='{.items[*].metadata.name}')
 
-for POD in $QGS_PODS; do
-    # Verify certs are visible in the QGS container via the shared dcap-qcnl-cache volume.
-    # busybox is added to the test image by Dockerfile.test.
-    kubectl exec "$POD" -n "$QGS_NAMESPACE" -c tdx-qgs -- \
-        /bin/busybox ls /run/dcap/cache/.dcap-qcnl/ | grep -q . \
-        || fail "No cert files in $POD"
-    log "PASS: $POD — cert file present"
+    for POD in $pods; do
+        # Verify certs are visible in the QGS container via the shared dcap-qcnl-cache volume.
+        # busybox is added to the test image by Dockerfile.test.
+        kubectl exec "$POD" -n "$QGS_NAMESPACE" -c tdx-qgs -- \
+            /bin/busybox ls /run/dcap/cache/.dcap-qcnl/ | grep -q . \
+            || fail "No cert files in $POD"
+        log "PASS: $POD — cert file present"
+    done
+}
+
+verify_certs_in_pods
+
+log "Offline mode checks passed"
+
+# ---------------------------------------------------------------------------
+# 9. Delete the CR and verify the DaemonSet is garbage-collected
+# ---------------------------------------------------------------------------
+
+log "Deleting TdxQuoteGenerationService (Offline mode)"
+kubectl delete -f "$REPO_ROOT/bin/operator/deployment/samples/offline-mode.yaml"
+
+log "Waiting for DaemonSet to be garbage-collected"
+kubectl wait daemonset/intel-tdx-dcap-qgs \
+    -n "$QGS_NAMESPACE" --for=delete --timeout="${TIMEOUT}s" \
+    || fail "DaemonSet was not garbage-collected after CR deletion"
+log "PASS: DaemonSet garbage-collected"
+
+# ---------------------------------------------------------------------------
+# 10. Deploy External mode and verify the same cert-availability contract
+# ---------------------------------------------------------------------------
+
+log "Applying TdxQuoteGenerationService (External mode)"
+kubectl apply -f "$REPO_ROOT/bin/operator/deployment/samples/external-mode.yaml"
+
+log "Waiting for QGS DaemonSet to be created"
+kubectl wait daemonset/intel-tdx-dcap-qgs \
+    -n "$QGS_NAMESPACE" --for=create --timeout="${TIMEOUT}s"
+
+# External mode has no platform-registration container, so there are no
+# platform-data secrets to discover qe_ids from. pck-certs-watcher instead
+# takes its ID literally as the node name, so -pck secrets must be keyed by
+# node name directly.
+SGX_NODES=$(kubectl get nodes -l intel.feature.node.kubernetes.io/sgx=true \
+    -o jsonpath='{.items[*].metadata.name}')
+log "SGX-labeled nodes: $SGX_NODES"
+
+log "Creating <node-name>-pck secrets"
+for NODE in $SGX_NODES; do
+    kubectl create secret generic "${NODE}-pck" \
+        -n "$QGS_NAMESPACE" \
+        --from-literal="certificate=${TEST_CERT}" \
+        --dry-run=client -o yaml | kubectl apply -f -
 done
+
+log "Waiting for QGS rollout to complete"
+kubectl rollout status daemonset/intel-tdx-dcap-qgs \
+    -n "$QGS_NAMESPACE" --timeout="${TIMEOUT}s"
+
+verify_certs_in_pods
+
+log "External mode checks passed"
 
 echo ""
 log "All e2e checks passed"

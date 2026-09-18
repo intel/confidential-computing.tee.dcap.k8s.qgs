@@ -58,10 +58,11 @@ docker run --rm \
 
 ```bash
 docker run --rm \
+  -v /path/to/id:/run/dcap/platform/id:ro \
   -v /path/to/certs:/output \
   -v ~/.kube:/root/.kube:ro \
   intel-tdx-qgs:latest \
-  pck-cert-tool get-certificates -p /usr/local/bin/get_platform_info -o /output -n default
+  pck-cert-tool get-certificates -i /run/dcap/platform/id -o /output -n default
 ```
 
 ## Using in Kubernetes

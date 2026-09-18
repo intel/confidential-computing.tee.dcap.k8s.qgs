@@ -25,6 +25,8 @@ spec:
         - get-platforms
         - -p
         - /usr/local/bin/get_platform_info
+        - -i
+        - /run/dcap/platform/id
         - -n
         - $(NAMESPACE)
         env:
@@ -55,6 +57,8 @@ spec:
         volumeMounts:
         - name: efivars
           mountPath: /sys/firmware/efi/efivars
+        - name: platform-info
+          mountPath: /run/dcap/platform
       - name: pck-certs-watcher
         image: intel-tdx-qgs:latest
         imagePullPolicy: IfNotPresent
@@ -62,8 +66,8 @@ spec:
         command:
         - pck-cert-tool
         - get-certificates
-        - -p
-        - /usr/local/bin/get_platform_info
+        - -i
+        - /run/dcap/platform/id
         - -n
         - $(NAMESPACE)
         - -o
@@ -78,7 +82,7 @@ spec:
             fieldRef:
               fieldPath: spec.nodeName
         securityContext:
-          runAsUser: 0
+          runAsNonRoot: true
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities:
@@ -91,11 +95,12 @@ spec:
           limits:
             memory: "64Mi"
             cpu: "100m"
-            sgx.intel.com/enclave: 1
-            sgx.intel.com/provision: 1
         volumeMounts:
         - name: dcap-qcnl-cache
           mountPath: /run/dcap/cache/
+        - name: platform-info
+          mountPath: /run/dcap/platform
+          readOnly: true
         startupProbe:
           exec:
             command:
@@ -161,6 +166,10 @@ spec:
         emptyDir:
           medium: Memory
           sizeLimit: 1Mi
+      - name: platform-info
+        emptyDir:
+          medium: Memory
+          sizeLimit: 4Ki
       - name: qgs-socket
         hostPath:
           path: /var/run/tdx-qgs

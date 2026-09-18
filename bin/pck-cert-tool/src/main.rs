@@ -38,6 +38,13 @@ const K8S_API_WATCH_ERROR_BACKOFF: Duration = Duration::from_secs(10);
 const SGX_PLATFORM_MANIFEST_EFI_VAR: &str =
     "SgxRegistrationServerRequest-304e0796-d515-4698-ac6e-e76cb1a71c28";
 
+/// Expected length, in hex characters, of a QE ID (sgx_key_128bit_t is 16 bytes).
+const ID_HEX_LEN: usize = 32;
+
+/// Reserved all-zero QE ID, used as the QPL cache file name when the actual ID isn't
+/// guaranteed to be a real QE ID (e.g. a node name in External mode).
+const ZERO_ID: &str = "00000000000000000000000000000000";
+
 /// OID for the Intel SGX PCK certificate extension
 const SGX_PCK_EXT_OID: Oid<'static> = oid!(1.2.840.113741.1.13.1);
 
@@ -95,16 +102,36 @@ struct GetPlatformsArgs {
     #[arg(short, long)]
     platform_info_binary: PathBuf,
 
+    /// Optional path to write the derived ID to (e.g. a shared emptyDir volume), so that
+    /// other containers (such as pck-certs-watcher) can read it without needing root or SGX
+    /// device access to call the platform info binary themselves.
+    #[arg(short = 'i', long)]
+    id_file: Option<PathBuf>,
+
     /// Kubernetes namespace (default: default)
     #[arg(short, long, default_value = "default")]
     namespace: String,
 }
 
 #[derive(Parser, Debug)]
+#[command(group(clap::ArgGroup::new("id_source").required(true).args(["id_file", "id"])))]
 struct GetCertificatesArgs {
-    /// Path to the binary that outputs platform info as JSON (cpu_svn, enc_ppid, pce_id, pce_svn, qe_id)
-    #[arg(short, long)]
-    platform_info_binary: PathBuf,
+    /// Path to a file containing the real SGX QE ID (e.g. written by `get-platforms
+    /// --id-file` onto a shared volume). Mutually exclusive with --id. Avoids needing SGX
+    /// enclave/device access in this container. The value MUST be the real SGX QE ID for this
+    /// node: it's used to build both the `<id>-pck` secret name and the on-disk cache file
+    /// name, and the SGX DCAP Quote Provider Library looks up that cache file by the node's
+    /// actual QE ID at runtime.
+    #[arg(short = 'i', long)]
+    id_file: Option<PathBuf>,
+
+    /// Literal ID value to use directly, without reading a file (e.g. `$(NODE_NAME)` in
+    /// External mode, where there is no `platform-registration` container to derive a real QE
+    /// ID). Mutually exclusive with --id-file. Used as-is to build the `<id>-pck` secret name,
+    /// but since it is not guaranteed to be a real QE ID, the on-disk cache file is always
+    /// written under the reserved all-zero ID instead (see `ZERO_ID`).
+    #[arg(long)]
+    id: Option<String>,
 
     /// Output directory path
     #[arg(short, long)]
@@ -214,12 +241,33 @@ fn get_platform_info(binary_path: &Path) -> Result<PlatformInfo> {
     Ok((cpu_svn, pce_id, pce_svn, qe_id))
 }
 
-fn get_qe_id(binary_path: &Path) -> Result<String> {
-    let (_, _, _, qe_id) = get_platform_info(binary_path)?;
-    let qe_id_str = std::str::from_utf8(&qe_id)
-        .context("Invalid UTF-8 in qe_id")?
-        .to_string();
-    Ok(qe_id_str)
+/// Read the ID previously written to a plain-text file by `get-platforms --id-file`,
+/// validating it's a well-formed QE ID (fixed-length hex string).
+fn get_id_from_file(path: &Path) -> Result<String> {
+    let contents = fs::read_to_string(path)
+        .with_context(|| format!("Failed to read ID file: {}", path.display()))?;
+    let id = contents.trim().to_string();
+    if id.len() != ID_HEX_LEN || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+        bail!(
+            "ID file {} has invalid content: expected a {ID_HEX_LEN}-character hex string, \
+             got {:?}",
+            path.display(),
+            id
+        );
+    }
+    Ok(id)
+}
+
+/// Write the ID to a plain-text file so sibling containers (e.g. pck-certs-watcher)
+/// sharing a volume can read it without needing SGX enclave/device access themselves.
+fn write_id_file(path: &Path, id: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+    }
+    fs::write(path, id).with_context(|| format!("Failed to write ID file: {}", path.display()))?;
+    debug!(path = %path.display(), "Wrote ID file");
+    Ok(())
 }
 
 /// Verify a PCK certificate against the SGX Intermediate CA's public key
@@ -438,14 +486,25 @@ fn get_platform_manifest() -> Result<Option<String>> {
     Ok(Some(manifest))
 }
 
-#[instrument(name = "get-platforms", skip(platform_info_binary), fields(namespace = %namespace, secret = tracing::field::Empty))]
-async fn create_secret(platform_info_binary: &Path, namespace: &str) -> Result<()> {
+#[instrument(name = "get-platforms", skip(platform_info_binary, id_file), fields(namespace = %namespace, secret = tracing::field::Empty))]
+async fn create_secret(
+    platform_info_binary: &Path,
+    id_file: Option<&Path>,
+    namespace: &str,
+) -> Result<()> {
     // Get platform info from external binary (fixed-size arrays, stack allocated)
     let (cpu_svn, pce_id, pce_svn, qe_id) = get_platform_info(platform_info_binary)?;
 
     // Convert qe_id to string for secret name
     let qe_id_str = std::str::from_utf8(&qe_id).context("Invalid UTF-8 in qe_id")?;
     tracing::Span::current().record("secret", qe_id_str);
+
+    // Share the ID with sibling containers (e.g. pck-certs-watcher) via a shared volume,
+    // so they don't need SGX enclave/device access just to learn it.
+    if let Some(path) = id_file {
+        write_id_file(path, qe_id_str)?;
+    }
+
     let pce_id_str = std::str::from_utf8(&pce_id).context("Invalid UTF-8 in pce_id")?;
     let cpu_svn_str = std::str::from_utf8(&cpu_svn).context("Invalid UTF-8 in cpu_svn")?;
     let pce_svn_str = std::str::from_utf8(&pce_svn).context("Invalid UTF-8 in pce_svn")?;
@@ -502,10 +561,10 @@ async fn create_secret(platform_info_binary: &Path, namespace: &str) -> Result<(
     Ok(())
 }
 
-#[instrument(skip(cert_data), fields(qe_id = %qe_id))]
-fn write_certificate_to_file(qe_id: &str, output_dir: &Path, cert_data: &[u8]) -> Result<()> {
-    // Create filename: <qe_id>_0000
-    let filename = format!("{qe_id}_0000");
+#[instrument(skip(cert_data), fields(cache_id = %cache_id))]
+fn write_certificate_to_file(cache_id: &str, output_dir: &Path, cert_data: &[u8]) -> Result<()> {
+    // Create filename: <cache_id>_0000
+    let filename = format!("{cache_id}_0000");
     let file_path = output_dir.join(&filename);
 
     debug!(path = %file_path.display(), "Writing certificate to file");
@@ -520,7 +579,7 @@ fn write_certificate_to_file(qe_id: &str, output_dir: &Path, cert_data: &[u8]) -
 }
 
 fn write_certificate_from_secret(
-    qe_id: &str,
+    cache_id: &str,
     output_dir: &Path,
     secret: &Secret,
     event: &str,
@@ -535,20 +594,42 @@ fn write_certificate_from_secret(
         return Ok(());
     };
 
-    write_certificate_to_file(qe_id, output_dir, cert_data.0.as_slice())
+    write_certificate_to_file(cache_id, output_dir, cert_data.0.as_slice())
 }
 
-#[instrument(name = "get-certificates", skip(platform_info_binary, output_dir), fields(namespace = %namespace, secret = tracing::field::Empty, output_dir = %output_dir.display()))]
+/// Resolves the `(id, cache_id)` pair for `get-certificates` from its two mutually exclusive ID
+/// sources. `id` names the `<id>-pck` secret to watch. `cache_id` names the on-disk QPL cache
+/// file. When the ID comes from a file (the default Online/Offline modes), it's guaranteed to be
+/// the node's real SGX QE ID, so both are the same value. When it's passed literally (e.g.
+/// `$(NODE_NAME)` in External mode), it isn't guaranteed to be a real QE ID, so the cache file
+/// always uses the reserved all-zero ID instead — an arbitrary/unrelated cache file name would
+/// never be found by the SGX DCAP Quote Provider Library at runtime anyway.
+fn resolve_id(id_file: Option<&Path>, literal_id: Option<&str>) -> Result<(String, String)> {
+    if let Some(path) = id_file {
+        let id = get_id_from_file(path)?;
+        let cache_id = id.clone();
+        Ok((id, cache_id))
+    } else {
+        let id = literal_id
+            .context("one of --id-file or --id is required")?
+            .trim()
+            .to_string();
+        if id.is_empty() {
+            bail!("--id must not be empty");
+        }
+        Ok((id, ZERO_ID.to_string()))
+    }
+}
+
+#[instrument(name = "get-certificates", skip(output_dir), fields(namespace = %namespace, secret = tracing::field::Empty, output_dir = %output_dir.display()))]
 async fn watch_certificates(
-    platform_info_binary: &Path,
+    id: &str,
+    cache_id: &str,
     output_dir: &Path,
     namespace: &str,
 ) -> Result<()> {
-    // Get QE ID from external binary
-    let qe_id = get_qe_id(platform_info_binary)?;
-
-    // Secret name is <qe_id>-pck
-    let secret_name = format!("{qe_id}-pck");
+    // Secret name is <id>-pck
+    let secret_name = format!("{id}-pck");
     tracing::Span::current().record("secret", &secret_name);
 
     info!("Starting certificate watcher");
@@ -568,7 +649,7 @@ async fn watch_certificates(
     match secrets.get(&secret_name).await {
         Ok(secret) => {
             info!("Found existing secret");
-            write_certificate_from_secret(&qe_id, output_dir, &secret, "initial-read")?;
+            write_certificate_from_secret(cache_id, output_dir, &secret, "initial-read")?;
             last_seen_resource_version = secret.metadata.resource_version.clone();
         }
         Err(e) => {
@@ -606,7 +687,7 @@ async fn watch_certificates(
                         }
 
                         info!("Secret updated");
-                        write_certificate_from_secret(&qe_id, output_dir, &secret, "watch-update")?;
+                        write_certificate_from_secret(cache_id, output_dir, &secret, "watch-update")?;
                         last_seen_resource_version = resource_version;
                     }
                     Some(Err(e)) => {
@@ -1017,22 +1098,16 @@ async fn main() -> Result<()> {
                 );
             }
 
-            create_secret(&get_args.platform_info_binary, &get_args.namespace).await?;
-        }
-        Commands::GetCertificates(get_args) => {
-            if !get_args.platform_info_binary.exists() {
-                bail!(
-                    "Platform info binary does not exist: {}",
-                    get_args.platform_info_binary.display()
-                );
-            }
-
-            watch_certificates(
+            create_secret(
                 &get_args.platform_info_binary,
-                &get_args.output_dir,
+                get_args.id_file.as_deref(),
                 &get_args.namespace,
             )
             .await?;
+        }
+        Commands::GetCertificates(get_args) => {
+            let (id, cache_id) = resolve_id(get_args.id_file.as_deref(), get_args.id.as_deref())?;
+            watch_certificates(&id, &cache_id, &get_args.output_dir, &get_args.namespace).await?;
         }
         Commands::Register(reg_args) => {
             let api_key = reg_args.api_key.or_else(|| {
@@ -1074,6 +1149,105 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A well-formed, 32-hex-character sample ID for tests.
+    const SAMPLE_ID: &str = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4";
+
+    /// Creates a fresh temp directory for a test case, tagged for easy identification.
+    fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "pck-cert-tool-test-{tag}-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn test_id_file_roundtrip() {
+        let dir = unique_temp_dir("roundtrip");
+        let file = dir.join("id");
+
+        write_id_file(&file, SAMPLE_ID).expect("write should succeed");
+        let read_back = get_id_from_file(&file).expect("read should succeed");
+        assert_eq!(read_back, SAMPLE_ID);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_id_file_trims_whitespace() {
+        let dir = unique_temp_dir("trim");
+        let file = dir.join("id");
+        std::fs::write(&file, format!("  {SAMPLE_ID}\n")).unwrap();
+
+        let read_back = get_id_from_file(&file).expect("read should succeed");
+        assert_eq!(read_back, SAMPLE_ID);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_id_file_invalid_content_errors() {
+        let dir = unique_temp_dir("invalid");
+        let cases = [
+            ("empty", "   \n"),
+            // Too short to be a valid 32-hex-character ID.
+            ("wrong_length", "a1b2c3d4e5f6"),
+            // Correct length, but contains a non-hex character.
+            ("non_hex", "g1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4"),
+        ];
+        for (case, content) in cases {
+            let file = dir.join(case);
+            std::fs::write(&file, content).unwrap();
+            assert!(
+                get_id_from_file(&file).is_err(),
+                "case {case:?} should have errored"
+            );
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_id_file_missing_errors() {
+        let path = std::env::temp_dir().join("pck-cert-tool-test-nonexistent-id-file");
+        assert!(get_id_from_file(&path).is_err());
+    }
+
+    #[test]
+    fn test_resolve_id_from_file_uses_id_as_cache_id() {
+        let dir = unique_temp_dir("resolve-from-file");
+        let file = dir.join("id");
+        write_id_file(&file, SAMPLE_ID).unwrap();
+
+        let (id, cache_id) = resolve_id(Some(&file), None).expect("should resolve");
+        assert_eq!(id, SAMPLE_ID);
+        assert_eq!(cache_id, SAMPLE_ID);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_resolve_id_from_literal_uses_zero_id_as_cache_id() {
+        let (id, cache_id) = resolve_id(None, Some("some-node-name")).expect("should resolve");
+        assert_eq!(id, "some-node-name");
+        assert_eq!(cache_id, ZERO_ID);
+    }
+
+    #[test]
+    fn test_resolve_id_empty_literal_errors() {
+        assert!(resolve_id(None, Some("   ")).is_err());
+    }
+
+    #[test]
+    fn test_resolve_id_neither_source_errors() {
+        assert!(resolve_id(None, None).is_err());
+    }
 
     #[test]
     fn test_tcb_info_validation_success() {
