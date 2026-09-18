@@ -1,17 +1,50 @@
 # Copyright (c) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
+# Named early so gpl-sources can read its dpkg database for exact versions.
+FROM gcr.io/distroless/cc-debian13@sha256:9b615fff20e1a4fad29c2b30562580b212c7dd5e2225236735cca0070ed11c78 AS final-base
+
+# Bundle source for the LGPL shared libs above (gcc-14, glibc).
+FROM rust:1.98.0-slim-trixie@sha256:17d1ba895198f9934c6314ec5346a0d5115372f3243390c3d731e242f35c2f27 AS gpl-sources
+WORKDIR /gpl-sources
+# Derive package=version from the pinned base image's own dpkg database
+# instead of hardcoding, so it never drifts from the pinned digest.
+# gcc-14-base covers libgcc-s1/libgomp1/libstdc++6 too (same source: gcc-14).
+COPY --from=final-base /var/lib/dpkg/status.d/libc6 \
+                  /var/lib/dpkg/status.d/gcc-14-base \
+                  /dpkg-status/
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl jq \
+    && rm -rf /var/lib/apt/lists/* \
+    && mkdir -p /dpkg-admin \
+    && for f in /dpkg-status/*; do printf 'Status: install ok installed\n'; cat "$f"; echo; done \
+         > /dpkg-admin/status \
+    && PKGS=$(dpkg-query --admindir=/dpkg-admin -f '${source:Package}=${source:Version}\n' \
+         -W $(ls /dpkg-status) | sort -u) \
+    && for pv in $PKGS; do \
+         pkg=${pv%=*}; ver=${pv#*=}; \
+         echo "Fetching LGPL source for: $pv"; \
+         curl -sSLf "https://snapshot.debian.org/mr/package/$pkg/$ver/srcfiles?fileinfo=1" \
+           | jq -r '.fileinfo | to_entries[] | .key as $hash | .value[0].name as $name | "\($hash) \($name)"' \
+           | while read -r hash name; do \
+               curl -sSLf "https://snapshot.debian.org/file/$hash" -o "$name"; \
+             done; \
+       done
+
 FROM rust:1.98.0-slim-trixie@sha256:17d1ba895198f9934c6314ec5346a0d5115372f3243390c3d731e242f35c2f27 AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    build-essential \
-    pkg-config \
-    libssl-dev \
+    make \
     ca-certificates \
     gnupg \
     && rm -rf /var/lib/apt/lists/*
+
+# cargo-about generates a third-party license/copyright notices report for the
+# Rust dependency tree. Installed early so this layer is cached independent of
+# source code changes.
+RUN cargo install cargo-about --locked --features cli
 
 ARG DCAP_TARBALL_SHA256="977d652e6efa2fcb6ec7763db08ae5bbb6be8948c3aec55642832b5a940e9a74"
 
@@ -32,7 +65,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copy source code
 WORKDIR /build
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock about.toml about.hbs ./
 
 # Copy member Cargo.tomls and sources for workspace resolution
 COPY bin/operator/Cargo.toml bin/operator/Cargo.toml
@@ -48,6 +81,13 @@ RUN make -C bin/get-platform-info clean && make -C bin/get-platform-info \
 # Build pck-cert-tool
 RUN cargo build --release -p pck-cert-tool \
     && chmod +x target/release/pck-cert-tool
+
+# Generate third-party license/copyright notices for pck-cert-tool's dependency tree
+RUN mkdir -p /rootfs/usr/local/share/pck-cert-tool \
+    && cargo about generate about.hbs \
+         --target x86_64-unknown-linux-gnu \
+         -o /rootfs/usr/local/share/pck-cert-tool/THIRD-PARTY-LICENSES.html \
+         --manifest-path bin/pck-cert-tool/Cargo.toml
 
 RUN dpkg-query -W -f='${Package}\n' > /tmp/base-pkglist.txt \
     && apt-get update && apt-get install -y --no-install-recommends \
@@ -85,10 +125,10 @@ RUN dpkg-query -W -f='${Package}\n' > /tmp/base-pkglist.txt \
     && cp /build/target/release/pck-cert-tool /rootfs/usr/local/bin/
 
 COPY LICENSE /rootfs/usr/local/share/pck-cert-tool/LICENSE
+COPY --from=gpl-sources /gpl-sources /rootfs/usr/local/share/pck-cert-tool/gpl-sources
 
 # Final stage — distroless/cc-debian13 provides glibc, libgcc, libstdc++, libssl, ca-certificates
-FROM gcr.io/distroless/cc-debian13@sha256:9b615fff20e1a4fad29c2b30562580b212c7dd5e2225236735cca0070ed11c78
-
+FROM final-base
 COPY --from=builder /rootfs/ /
 
 # QCNL local caching is the only supported mode: this image ships without curl/libcurl,

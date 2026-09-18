@@ -23,19 +23,13 @@ updates:
           - "*"
 
   - package-ecosystem: docker
-    directory: /build/tdx-qgs
+    directories:
+      - /build/tdx-qgs
+      - /build/operator
+      - /test/e2e
     schedule:
       interval: weekly
     groups:
-      docker-tdx-qgs:
-        patterns:
-          - "*"
-
-  - package-ecosystem: docker
-    directory: /build/operator
-    schedule:
-      interval: weekly
-    groups:
-      docker-operator:
+      docker-images:
         patterns:
           - "*"
