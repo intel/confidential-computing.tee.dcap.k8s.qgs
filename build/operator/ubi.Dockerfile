@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-FROM registry.access.redhat.com/ubi10/ubi:latest@sha256:60cd050b8dced7e972273b45bfd6052a2153475042f8b7c86d5e3e558b266780 AS builder
+FROM registry.access.redhat.com/ubi10/ubi:latest@sha256:6e3f045f5380e8d8dffaea7e01bf926d2db44aff751048697e780d1253687843 AS builder
 
 # gcc is needed by the ring crate (C assembly)
 RUN dnf install -y \
