@@ -334,6 +334,43 @@ fn parse_node_selectors(node_selectors: &[String]) -> Result<BTreeMap<String, St
     Ok(map)
 }
 
+/// Reconfigure `pck-certs-watcher` to take its ID literally as `$(NODE_NAME)` on the command
+/// line instead of reading it from the shared `platform-info` file. Used only in External
+/// mode, where no `platform-registration` container is present to derive the ID itself. As a
+/// result, the external system provisioning PCK certificate secrets must name them
+/// `<node-name>-pck`.
+fn use_node_name_as_literal_id(pod_spec: &mut k8s_openapi::api::core::v1::PodSpec) -> Result<()> {
+    let container = pod_spec
+        .init_containers
+        .as_mut()
+        .and_then(|containers| {
+            containers
+                .iter_mut()
+                .find(|c| c.name == "pck-certs-watcher")
+        })
+        .ok_or_else(|| {
+            Error::Generic("pck-certs-watcher initContainer not found in template".to_string())
+        })?;
+
+    // Replace "-i", "/run/dcap/platform/id" with "--id", "$(NODE_NAME)" in the command.
+    let command = container.command.as_mut().ok_or_else(|| {
+        Error::Generic("pck-certs-watcher command not found in template".to_string())
+    })?;
+    let flag_index = command
+        .iter()
+        .position(|a| a == "-i")
+        .ok_or_else(|| Error::Generic("pck-certs-watcher command missing -i flag".to_string()))?;
+    command[flag_index] = "--id".to_string();
+    command[flag_index + 1] = "$(NODE_NAME)".to_string();
+
+    // Drop the now-unused "platform-info" volumeMount; nothing is read from disk anymore.
+    if let Some(ref mut mounts) = container.volume_mounts {
+        mounts.retain(|m| m.name != "platform-info");
+    }
+
+    Ok(())
+}
+
 /// Create or update DaemonSet
 async fn create_or_update_daemonset(
     ctx: &Context,
@@ -379,7 +416,19 @@ async fn create_or_update_daemonset(
             volumes.retain(|v| v.name != "efivars");
         }
 
-        info!("Removed platform-registration initContainer and efivars volume (External mode)");
+        // Without platform-registration there is nothing to write the shared ID file, so
+        // pck-certs-watcher instead takes its ID literally as $(NODE_NAME).
+        use_node_name_as_literal_id(pod_spec)?;
+
+        // The "platform-info" volume is now unused by both containers in this mode.
+        if let Some(ref mut volumes) = pod_spec.volumes {
+            volumes.retain(|v| v.name != "platform-info");
+        }
+
+        info!(
+            "Removed platform-registration initContainer/efivars volume and switched \
+             pck-certs-watcher to a literal $(NODE_NAME) ID (External mode)"
+        );
     }
 
     // Apply node selector if provided
