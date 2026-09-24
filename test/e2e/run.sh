@@ -31,7 +31,7 @@ TIMEOUT="${TIMEOUT:-180}"
 NUM_WORKERS="${NUM_WORKERS:-5}"
 # Set SKIP_BUILD=1 to skip docker builds (e.g. when images are pre-built in CI).
 SKIP_BUILD="${SKIP_BUILD:-0}"
-# Set KIND_NODE_IMAGE to override the k8s node image (e.g. kindest/node:v1.35.5@sha256:...).
+# Set KIND_NODE_IMAGE to override the k8s node image (e.g. kindest/node:v1.37.0@sha256:...).
 KIND_NODE_IMAGE="${KIND_NODE_IMAGE:-}"
 
 # Certificate content written to each -pck secret and verified in the pods.
