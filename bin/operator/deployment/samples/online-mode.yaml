@@ -1,7 +1,7 @@
 # Example: TdxQuoteGenerationService with Online Platform Registration
 #
 # This example demonstrates deploying the TDX Quote Generation Service
-# with automatic certificate provisioning via Intel PCS.
+# with automatic PCK certificate provisioning via Intel PCS.
 #
 # Prerequisites:
 # 1. Create Intel PCS API key secret:

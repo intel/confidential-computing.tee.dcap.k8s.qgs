@@ -33,7 +33,7 @@ Watch platform-data secrets and automatically register them with Intel PCS to ob
   - Cache header with 1-year expiration (8760 hours)
   - TCB component (platform-specific CPU SVN from secret data)
   - SGX TCB Info JSON
-  - Certificate chain (URL-decoded PEM)
+  - Certificate chain (URL-encoded PEM)
   - PCK certificates JSON array
 - Creates new secrets with `-pck` suffix containing base64-encoded cache files
 - Labels PCK secrets with `fmspc=<value>` extracted from the SGX-FMSPC response header
@@ -49,7 +49,7 @@ Get PCK certificates from a Kubernetes secret and write to a file, continuously 
 - Reads a secret named `<id>-pck`, where `id` comes from either `--id-file` (a file containing
   the real SGX QE ID) or `--id` (a literal value, e.g. `$(NODE_NAME)` in External mode) — see
   [Sharing the ID with get-certificates](#sharing-the-id-with-get-certificates)
-- Writes certificate data to `<output_dir>/<cache_id>_0000`, where `cache_id` is the ID itself
+- Writes PCK certificate data to `<output_dir>/<cache_id>_0000`, where `cache_id` is the ID itself
   for `--id-file`, or the reserved all-zero ID for `--id`
 - Watches the secret for updates and rewrites the file when changes occur
 - Continues running and watching until interrupted
@@ -214,7 +214,7 @@ The `certificate` field contains a binary cache file in the format used by Intel
 
 4. **Certificate Chain** (length-prefixed):
    - Length: `u32` (little-endian)
-   - Data: URL-decoded PEM certificate chain from SGX-PCK-Certificate-Issuer-Chain header
+   - Data: URL-encoded PEM certificate chain from SGX-PCK-Certificate-Issuer-Chain header
 
 5. **PCK Certificates** (length-prefixed):
    - Length: `u32` (little-endian)
