@@ -25,11 +25,6 @@ The Docker image contains:
   - libsgx-dcap-ql (DCAP Quote Library)
   - libsgx-dcap-default-qpl (DCAP Quote Provider Library)
 
-## Base Image
-
-- Debian 12 (Bookworm)
-- Multi-stage build to minimize final image size
-
 ## Usage Examples
 
 ### Check installed binaries
@@ -65,10 +60,6 @@ docker run --rm \
   pck-cert-tool get-certificates -i /run/dcap/platform/id -o /output -n default
 ```
 
-## Using in Kubernetes
-
-Deploy using the operator — see [bin/operator/README.md](bin/operator/README.md) for full instructions.
-
 ## Required Permissions
 
 - **For get-platforms**: Requires privileged access to read EFI variables and access SGX devices
@@ -88,16 +79,3 @@ cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.
 ```
 
 To verify the signing in Kubernetes, one can use [policy managers](https://docs.sigstore.dev/policy-controller/overview/) with [keyless authorities](https://docs.sigstore.dev/policy-controller/overview/#configuring-keyless-authorities).
-
-### Kubernetes ServiceAccount Permissions
-
-When running in Kubernetes, the pck-cert-tool requires specific RBAC permissions managed by the operator.
-
-#### For get-platforms command:
-- `secrets`: `get`, `create`, `patch` (to create/update secrets with platform data)
-
-#### For get-certificates command:
-- `secrets`: `get`, `watch` (to read and watch for certificate updates)
-
-#### For register command:
-- `secrets`: `get`, `create`, `patch`, `watch`, `list` (to watch platform-data secrets and create PCK secrets)

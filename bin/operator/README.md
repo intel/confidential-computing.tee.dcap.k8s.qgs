@@ -6,13 +6,6 @@ A Kubernetes operator for managing Intel TDX DCAP (Data Center Attestation Primi
 
 This operator automates the deployment and lifecycle management of TDX Quote Generation Service (QGS) across Kubernetes clusters, handling platform registration and PCK certificate provisioning in both online and offline modes.
 
-## Prerequisites
-
-- Rust 1.75 or later
-- kubectl configured with cluster access
-- Docker (for building container images)
-- Kubernetes cluster with SGX/TDX-capable worker nodes
-
 ## Building
 
 ### Build the Operator Binary
@@ -24,18 +17,7 @@ cargo build --release -p operator
 
 ### Build the Docker Image
 
-Multi-stage build (see [DOCKER.md](../../DOCKER.md) for full details). Build from the **repo root**:
-
-```bash
-docker build -t intel-tdx-dcap-operator:latest -f build/operator/Dockerfile .
-```
-
-**Push to registry:**
-
-```bash
-docker tag intel-tdx-dcap-operator:latest myregistry.example.com/intel-tdx-dcap-operator:v1.0.0
-docker push myregistry.example.com/intel-tdx-dcap-operator:v1.0.0
-```
+See [DOCKER.md](../../DOCKER.md) for full build instructions.
 
 ## Deployment
 
@@ -61,26 +43,7 @@ kubectl get pods -n intel-dcap-operator-system
 
 ### Deploy a TdxQuoteGenerationService
 
-**Online Mode (with Intel PCS):**
-
-```bash
-# 1. Create API key secret
-kubectl create secret generic intel-pcs-api-key \
-  --from-literal=api-key=YOUR_INTEL_API_KEY
-
-# 2. Deploy CR
-kubectl apply -f deployment/samples/online-mode.yaml
-
-# 3. Check status
-kubectl get tqgs intel-tdx-dcap
-```
-
-**Offline Mode (air-gapped):**
-
-```bash
-kubectl apply -f deployment/samples/offline-mode.yaml
-kubectl get tqgs intel-tdx-dcap
-```
+For a first end-to-end deployment in Online mode, see [QUICKSTART.md](../../QUICKSTART.md). Offline mode follows the same steps but applies `deployment/samples/offline-mode.yaml` and requires no Intel PCS API key.
 
 **External Mode (externally managed platform registration):**
 
@@ -152,23 +115,6 @@ kubectl delete -k deployment/default
 
 ## Customization
 
-### Change Image
-
-Edit `deployment/default/kustomization.yaml`:
-
-```yaml
-images:
-- name: intel-tdx-dcap-operator
-  newName: myregistry.example.com/intel-tdx-dcap-operator
-  newTag: v1.0.0
-```
-
-Then apply:
-
-```bash
-kubectl apply -k deployment/default
-```
-
 ### Change Namespace
 
 Edit `deployment/default/kustomization.yaml`:
@@ -179,7 +125,7 @@ namespace: my-custom-namespace
 
 ### Adjust Resources
 
-Edit `deployment/manager/deployment.yaml`:
+Edit `deployment/manager/manager.yaml`:
 
 ```yaml
 resources:
@@ -208,7 +154,7 @@ kubectl apply -f deployment/manager/namespace.yaml
 kubectl apply -f deployment/rbac/
 
 # 4. Create operator deployment
-kubectl apply -f deployment/manager/deployment.yaml
+kubectl apply -f deployment/manager/manager.yaml
 ```
 
 ### Preview Generated Manifests
@@ -275,21 +221,18 @@ The operator uses two separate RBAC resources:
 - **DaemonSets**: full CRUD + delete (explicit delete when switching modes)
 - **Deployments**: full CRUD + delete (explicit delete when switching to Offline)
 - **Secrets**: get, list, watch, create, patch
-- **ServiceAccounts**: get, list, watch, create, update, patch (GC via ownerRef)
-- **Roles**: get, list, watch, create, update, patch (GC via ownerRef)
-- **RoleBindings**: get, list, watch, create, update, patch (GC via ownerRef)
 
-**Note:** The operator uses the `default` ServiceAccount in `intel-dcap-operator-system`. It creates dedicated ServiceAccounts for the QGS/registrar pods it manages.
+**Note:** The operator uses the `default` ServiceAccount in `intel-dcap-operator-system`. It does not create or manage ServiceAccounts, Roles, or RoleBindings at runtime — the `qgs` ServiceAccount/Role/RoleBinding used by QGS/registrar pods (see below) are static manifests applied once via `kubectl apply -k deployment/default`, not reconciled by the controller.
 
-### **2. Pod Role (created by operator)**
+### **2. Pod Role (statically deployed)**
 
-The operator creates a namespaced Role for QGS/registrar pods:
+`deployment/rbac/intel-tdx-dcap-role.yaml` defines a namespaced Role for QGS/registrar pods:
 
 ```yaml
 rules:
 - apiGroups: [""]
   resources: ["secrets"]
-  verbs: [get, create, list, patch, watch]
+  verbs: [get, list, watch, create, patch]
 ```
 
 **pck-cert-tool Operations:**
@@ -320,7 +263,10 @@ cargo test -p operator
 
 ## Environment Variables
 
-- `OPERATOR_NAMESPACE` - Namespace where the operator creates resources (set via Downward API)
+- `OPERATOR_NAMESPACE` - Namespace where the operator creates resources (set via Downward API `fieldRef`; defaults to `default` if unset)
+- `QGS_SERVICE_ACCOUNT` - Name of the ServiceAccount used by QGS/registrar pods the operator creates (set by kustomize from the `qgs` ServiceAccount name; defaults to `intel-tdx-dcap-qgs` if unset)
+- `RELATED_IMAGE_QGS` - Overrides the image used for all DaemonSet containers (platform-registration initContainer, pck-certs-watcher sidecar, tdx-qgs). Follows the OLM `RELATED_IMAGE_*` convention so operator-sdk includes it in `relatedImages` when generating the bundle
+- `HTTPS_PROXY` / `https_proxy` - If set on the operator process, propagated into the registrar Deployment's container env so it can reach Intel PCS through a proxy
 
 ## Project Structure
 
@@ -404,54 +350,3 @@ containerSecurityContext:
     drop: [ALL]
   readOnlyRootFilesystem: true
 ```
-
-## Production Considerations
-
-### Image Registry
-
-```bash
-docker tag intel-tdx-dcap-operator:latest myregistry.example.com/intel-tdx-dcap-operator:v1.0.0
-docker push myregistry.example.com/intel-tdx-dcap-operator:v1.0.0
-
-cd deployment/default
-kustomize edit set image intel-tdx-dcap-operator=myregistry.example.com/intel-tdx-dcap-operator:v1.0.0
-kubectl apply -k .
-```
-
-### Resource Limits
-
-Adjust based on cluster size:
-
-```yaml
-resources:
-  limits:
-    cpu: 500m      # Increase for large clusters
-    memory: 256Mi  # Increase if managing many CRs
-```
-
-### High Availability
-
-For HA deployment:
-1. Implement leader election (using leases)
-2. Update deployment replicas to 2-3
-3. Add pod anti-affinity rules
-
-## Uninstall
-
-```bash
-# Delete all CRs
-kubectl delete tqgs --all
-
-# Delete operator
-kubectl delete -k deployment/default
-```
-
-## Support
-
-- Review this README for operator documentation
-- Check [pck-cert-tool README](../pck-cert-tool/README.md) for certificate management
-- Examine `templates/` directory for DaemonSet/Deployment configuration
-
-## License
-
-This project is licensed under the Apache License 2.0.
