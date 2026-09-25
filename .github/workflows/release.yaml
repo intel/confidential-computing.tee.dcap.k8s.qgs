@@ -11,7 +11,7 @@ permissions:
 jobs:
   tag_fix:
     name: Prepare image tag
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       fixed_tag: ${{ steps.fix.outputs.tag }}
     env:
@@ -25,7 +25,7 @@ jobs:
     name: Build, scan, push and sign
     needs:
       - tag_fix
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       id-token: write

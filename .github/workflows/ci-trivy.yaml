@@ -12,7 +12,7 @@ permissions:
 jobs:
   trivy-scan-dockerfiles:
     name: Scan Dockerfiles
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       security-events: write
@@ -48,7 +48,7 @@ jobs:
 
   trivy-scan-deployments:
     name: Scan Kubernetes manifests
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: read
       security-events: write
