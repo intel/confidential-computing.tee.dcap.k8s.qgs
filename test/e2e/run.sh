@@ -12,7 +12,7 @@
 #
 # Environment variables:
 #   KIND_CLUSTER   kind cluster name   (default: intel-tdx-dcap-e2e)
-#   NFD_VERSION    NFD release tag     (default: v0.17.1)
+#   NFD_VERSION    NFD release tag     (default: v0.19.0)
 #   NUM_WORKERS    number of workers   (default: 5)
 #   QGS_NAMESPACE  namespace for CR    (default: intel-dcap-operator-system)
 #   TIMEOUT        seconds per wait    (default: 180)
@@ -24,14 +24,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
 KIND_CLUSTER="${KIND_CLUSTER:-intel-tdx-dcap-e2e}"
-NFD_VERSION="${NFD_VERSION:-v0.17.1}"
+NFD_VERSION="${NFD_VERSION:-v0.19.0}"
 QGS_NAMESPACE="${QGS_NAMESPACE:-intel-dcap-operator-system}"
 OPERATOR_NAMESPACE="intel-dcap-operator-system"
 TIMEOUT="${TIMEOUT:-180}"
 NUM_WORKERS="${NUM_WORKERS:-5}"
 # Set SKIP_BUILD=1 to skip docker builds (e.g. when images are pre-built in CI).
 SKIP_BUILD="${SKIP_BUILD:-0}"
-# Set KIND_NODE_IMAGE to override the k8s node image (e.g. kindest/node:v1.35.5@sha256:...).
+# Set KIND_NODE_IMAGE to override the k8s node image (e.g. kindest/node:v1.37.0@sha256:...).
 KIND_NODE_IMAGE="${KIND_NODE_IMAGE:-}"
 
 # Certificate content written to each -pck secret and verified in the pods.
