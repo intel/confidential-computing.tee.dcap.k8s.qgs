@@ -6,7 +6,7 @@ domain: intel.com
 layout:
 - go.kubebuilder.io/v4
 projectName: operator
-repo: github.com/intel/confidential-computing.tee.dcap.kubernetes-tools
+repo: github.com/intel/confidential-computing.tee.dcap.k8s.qgs
 resources:
 - api:
     crdVersion: v1

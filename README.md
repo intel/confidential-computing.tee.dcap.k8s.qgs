@@ -11,7 +11,7 @@ Tools and a Kubernetes operator for running Intel® Trust Domain Extensions (TDX
 
 This repository automates the distribution of platform-specific PCK (Provisioning Certification Key) certificates to TDX-capable worker nodes, so QGS pods can generate attestation quotes locally without depending on the Intel Provisioning Certification Service (PCS) at runtime. Certificates can be provisioned online (PCS-connected), offline (air-gapped), or by an external system.
 
-This follows the [Indirect Registration](https://cc-enabling.trustedservices.intel.com/intel-tdx-enabling-guide/02/infrastructure_setup/#indirect-registration) model, sending each platform's manifest to Intel PCS with every registration request, and by writing each node's PCK certificate straight into its local on-disk QPL cache, avoids the need for a separate caching service (e.g., PCCS).
+This follows the [Indirect Registration](https://cc-enabling.trustedservices.intel.com/intel-tdx-enabling-guide/02/infrastructure_setup/#indirect-registration) model: each platform's manifest is sent to Intel PCS with every registration request rather than registered once upfront. Because each node's PCK certificate is written straight into its local on-disk QPL cache, no separate caching service (e.g., PCCS) is needed.
 
 ![Architecture Diagram](architecture.svg)
 
