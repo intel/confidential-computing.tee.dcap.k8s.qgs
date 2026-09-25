@@ -1,0 +1,16 @@
+{{- if .Values.tdxQuoteGenerationService.enabled -}}
+{{- if not (has .Values.tdxQuoteGenerationService.mode (list "Online" "Offline" "External")) -}}
+{{- fail "tdxQuoteGenerationService.mode must be one of: Online, Offline, External" -}}
+{{- end -}}
+{{- range .Values.tdxQuoteGenerationService.nodeSelector -}}
+{{- if not (regexMatch "^([A-Za-z0-9][-A-Za-z0-9_.]*/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?=.+$" .) -}}
+{{- fail (printf "invalid nodeSelector %q: expected key=value" .) -}}
+{{- end -}}
+{{- end -}}
+{{- if eq .Values.tdxQuoteGenerationService.mode "Online" -}}
+{{- if and (not .Values.pcsApiKey.apiKey) (not .Values.pcsApiKey.existingSecret) (not .Values.tdxQuoteGenerationService.apiKeySecretName) -}}
+{{- fail "Online mode requires one of: pcsApiKey.apiKey, pcsApiKey.existingSecret, or tdxQuoteGenerationService.apiKeySecretName" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+

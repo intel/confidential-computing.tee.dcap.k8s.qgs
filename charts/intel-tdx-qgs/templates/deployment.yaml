@@ -1,0 +1,70 @@
+{{- if and .Values.tdxQuoteGenerationService.enabled (eq .Values.tdxQuoteGenerationService.mode "Online") }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "intel-tdx-qgs.registrarName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "intel-tdx-qgs.labels" . | nindent 4 }}
+    app.kubernetes.io/component: registrar
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "intel-tdx-qgs.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: registrar
+  template:
+    metadata:
+      labels:
+        {{- include "intel-tdx-qgs.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: registrar
+        app: intel-tdx-registrar
+    spec:
+      serviceAccountName: intel-tdx-dcap-qgs
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: registrar
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - pck-cert-tool
+            - register
+            - -n
+            - $(NAMESPACE)
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: INTEL_PCS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "intel-tdx-qgs.pcsSecretName" .) .Values.tdxQuoteGenerationService.apiKeySecretName }}
+                  key: {{ .Values.pcsApiKey.secretKey }}
+                  optional: true
+            {{- with .Values.registrar.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            runAsNonRoot: true
+            runAsUser: 65534
+            runAsGroup: 65534
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "64Mi"
+              cpu: "100m"
+{{- end }}
