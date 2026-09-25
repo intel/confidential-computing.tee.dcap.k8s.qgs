@@ -1,0 +1,40 @@
+image:
+  repository: intel-tdx-qgs
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+# Example:
+# imagePullSecrets:
+#   - name: regcred
+
+registrar:
+  # Optional environment variables for example proxy which will be used by the registrar pod in Online mode.
+  extraEnv: []
+
+rbac:
+  create: true
+
+tdxQuoteGenerationService:
+  # Deploy QGS directly. No CRD or operator is installed.
+  enabled: true
+  name: intel-tdx-dcap
+
+  # One of: Online, Offline, External.
+  # Online creates the registrar Deployment.
+  # External omits platform registration and the efivars host mount.
+  mode: Offline
+
+  # Required in Online mode unless pcsApiKey.existingSecret is provided.
+  apiKeySecretName: intel-pcs-api-key
+
+  # Labels in key=value format used to select QGS nodes.
+  nodeSelector:
+    - "intel.feature.node.kubernetes.io/sgx=true"
+
+pcsApiKey:
+  # If mode=Online and apiKey is set, the chart creates this secret.
+  existingSecret: ""
+  secretName: intel-pcs-api-key
+  secretKey: api-key
+  apiKey: ""

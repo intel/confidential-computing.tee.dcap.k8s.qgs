@@ -166,14 +166,14 @@ spec:
         emptyDir:
           medium: Memory
           sizeLimit: 1Mi
-      - name: platform-info
-        emptyDir:
-          medium: Memory
-          sizeLimit: 4Ki
       - name: qgs-socket
         hostPath:
           path: /var/run/tdx-qgs
           type: DirectoryOrCreate
+      - name: platform-info
+        emptyDir:
+          medium: Memory
+          sizeLimit: 4Ki
       - name: efivars
         hostPath:
           path: /sys/firmware/efi/efivars/

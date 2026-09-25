@@ -1,0 +1,211 @@
+{{- if .Values.tdxQuoteGenerationService.enabled }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "intel-tdx-qgs.qgsName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "intel-tdx-qgs.labels" . | nindent 4 }}
+    app.kubernetes.io/component: qgs
+spec:
+  selector:
+    matchLabels:
+      {{- include "intel-tdx-qgs.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: qgs
+  template:
+    metadata:
+      labels:
+        {{- include "intel-tdx-qgs.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: qgs
+        app: intel-tdx-qgs
+    spec:
+      serviceAccountName: intel-tdx-dcap-qgs
+      priorityClassName: system-node-critical
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tdxQuoteGenerationService.nodeSelector }}
+      nodeSelector:
+        {{- range . }}
+        {{- $selector := splitn "=" 2 . }}
+        {{ $selector._0 }}: {{ $selector._1 | quote }}
+        {{- end }}
+      {{- end }}
+      initContainers:
+        {{- if ne .Values.tdxQuoteGenerationService.mode "External" }}
+        - name: platform-registration
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - pck-cert-tool
+            - get-platforms
+            - -p
+            - /usr/local/bin/get_platform_info
+            - -i
+            - /run/dcap/platform/id
+            - -n
+            - $(NAMESPACE)
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            privileged: true
+            readOnlyRootFilesystem: true
+            runAsUser: 0
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "64Mi"
+              cpu: "100m"
+              sgx.intel.com/enclave: 1
+              sgx.intel.com/provision: 1
+          volumeMounts:
+            - name: efivars
+              mountPath: /sys/firmware/efi/efivars
+            - name: platform-info
+              mountPath: /run/dcap/platform
+        {{- end }}
+        - name: pck-certs-watcher
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          restartPolicy: Always
+          command:
+            - pck-cert-tool
+            - get-certificates
+            {{- if eq .Values.tdxQuoteGenerationService.mode "External" }}
+            - --id
+            - $(NODE_NAME)
+            {{- else }}
+            - -i
+            - /run/dcap/platform/id
+            {{- end }}
+            - -n
+            - $(NAMESPACE)
+            - -o
+            - /run/dcap/cache/.dcap-qcnl
+          env:
+            - name: NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "10m"
+            limits:
+              memory: "64Mi"
+              cpu: "100m"
+          volumeMounts:
+            - name: dcap-qcnl-cache
+              mountPath: /run/dcap/cache/
+            {{- if ne .Values.tdxQuoteGenerationService.mode "External" }}
+            - name: platform-info
+              mountPath: /run/dcap/platform
+              readOnly: true
+            {{- end }}
+          startupProbe:
+            exec:
+              command:
+                - pck-cert-tool
+                - probe
+                - cache-ready
+                - /run/dcap/cache/.dcap-qcnl
+            periodSeconds: 10
+            failureThreshold: 2147483647
+      containers:
+        - name: tdx-qgs
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          args:
+            - -n=4
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            runAsUser: 0
+            runAsGroup: 992
+            seLinuxOptions:
+              type: spc_t
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              memory: "64Mi"
+              cpu: "10m"
+            limits:
+              memory: "128Mi"
+              cpu: "200m"
+              sgx.intel.com/enclave: 1
+              sgx.intel.com/provision: 1
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: XDG_CACHE_HOME
+              value: "/run/dcap/cache"
+          startupProbe:
+            exec:
+              command:
+                - pck-cert-tool
+                - probe
+                - check-socket
+                - /var/run/tdx-qgs/qgs.socket
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            exec:
+              command:
+                - pck-cert-tool
+                - probe
+                - check-socket
+                - /var/run/tdx-qgs/qgs.socket
+            periodSeconds: 60
+          volumeMounts:
+            - name: dcap-qcnl-cache
+              mountPath: /run/dcap/cache
+              readOnly: true
+            - name: qgs-socket
+              mountPath: /var/run/tdx-qgs
+      volumes:
+        - name: dcap-qcnl-cache
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: qgs-socket
+          hostPath:
+            path: /var/run/tdx-qgs
+            type: DirectoryOrCreate
+        {{- if ne .Values.tdxQuoteGenerationService.mode "External" }}
+        - name: platform-info
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Ki
+        - name: efivars
+          hostPath:
+            path: /sys/firmware/efi/efivars/
+        {{- end }}
+{{- end }}
+

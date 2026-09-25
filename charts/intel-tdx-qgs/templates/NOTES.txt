@@ -1,0 +1,38 @@
+Intel TDX DCAP Quote Generation Service has been installed.
+
+Namespace: {{ .Release.Namespace }}
+Release:   {{ .Release.Name }}
+
+{{- if .Values.tdxQuoteGenerationService.enabled }}
+
+1) Verify QGS:
+   kubectl rollout status daemonset/{{ include "intel-tdx-qgs.qgsName" . }} -n {{ .Release.Namespace }}
+
+2) Verify QGS pods:
+   kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/component=qgs
+
+{{- else }}
+
+QGS is disabled by values.
+
+{{- end }}
+
+{{- if and .Values.tdxQuoteGenerationService.enabled (eq .Values.tdxQuoteGenerationService.mode "Online") }}
+
+Online mode is enabled.
+- API key secret used: {{ default (include "intel-tdx-qgs.pcsSecretName" .) .Values.tdxQuoteGenerationService.apiKeySecretName }}
+- Verify registrar: kubectl rollout status deployment/{{ include "intel-tdx-qgs.registrarName" . }} -n {{ .Release.Namespace }}
+
+{{- end }}
+
+{{- if and .Values.tdxQuoteGenerationService.enabled (eq .Values.tdxQuoteGenerationService.mode "Offline") }}
+
+Offline mode is enabled.
+
+{{- end }}
+
+{{- if and .Values.tdxQuoteGenerationService.enabled (eq .Values.tdxQuoteGenerationService.mode "External") }}
+
+External mode is enabled.
+
+{{- end }}

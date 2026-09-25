@@ -1,0 +1,138 @@
+environments:
+  default:
+    values:
+      - intelDevicePluginVersion: 0.37.0
+      - certManagerVersion: v1.21.2
+      - nfdVersion: 0.19.0
+      - dcapValuesFile: ./helmfile-qgs-values/tdx-qgs-online-values.yaml.gotmpl
+---
+repositories:
+  - name: nfd
+    url: https://kubernetes-sigs.github.io/node-feature-discovery/charts
+  - name: jetstack
+    url: https://charts.jetstack.io
+  - name: intel
+    url: https://intel.github.io/helm-charts
+
+helmDefaults:
+  wait: true
+  timeout: 600
+  diffArgs:
+    - --disable-validation
+    - --disable-openapi-validation
+
+releases:
+  # --------------------------------------------------------------------------
+  # Node Feature Discovery
+  # --------------------------------------------------------------------------
+  - name: nfd
+    namespace: node-feature-discovery
+    createNamespace: true
+    chart: nfd/node-feature-discovery
+    version: "{{ .Values.nfdVersion }}"
+
+  # --------------------------------------------------------------------------
+  # Cert-manager
+  # --------------------------------------------------------------------------
+  - name: cert-manager
+    namespace: cert-manager
+    createNamespace: true
+    chart: jetstack/cert-manager
+    version: "{{ .Values.certManagerVersion }}"
+    needs:
+      - node-feature-discovery/nfd
+    set:
+      - name: installCRDs
+        value: true
+
+  # --------------------------------------------------------------------------
+  # Intel Device Plugins Operator
+  # --------------------------------------------------------------------------
+  - name: device-plugins-operator
+    namespace: intel-device-plugins
+    createNamespace: true
+    chart: intel/intel-device-plugins-operator
+    version: "{{ .Values.intelDevicePluginVersion }}"
+    needs:
+      - cert-manager/cert-manager
+
+  # --------------------------------------------------------------------------
+  # Intel SGX Device Plugin
+  # --------------------------------------------------------------------------
+  - name: sgx-plugin
+    namespace: intel-device-plugins
+    createNamespace: true
+    chart: intel/intel-device-plugins-sgx
+    version: "{{ .Values.intelDevicePluginVersion }}"
+    values:
+      - tolerations: []
+    set:
+      - name: nodeFeatureRule
+        value: true
+    needs:
+      - intel-device-plugins/device-plugins-operator
+    hooks:
+      - events: ["presync"]
+        showlogs: true
+        command: bash
+        args:
+          - -ec
+          - |
+            namespace=intel-device-plugins
+
+            kubectl rollout status \
+              deployment/inteldeviceplugins-controller-manager \
+              --namespace "$namespace" \
+              --timeout=300s
+
+            deadline=$((SECONDS + 300))
+            until kubectl get endpoints inteldeviceplugins-webhook-service \
+              --namespace "$namespace" \
+              --output jsonpath='{.subsets[*].addresses[*].ip}' \
+              | grep -q .; do
+              if (( SECONDS >= deadline )); then
+                echo "Intel device plugins webhook has no ready endpoint after 300 seconds" >&2
+                kubectl get deployment,pods,service,endpoints \
+                  --namespace "$namespace" \
+                  --selector control-plane=controller-manager >&2 || true
+                exit 1
+              fi
+              echo "Waiting for the Intel device plugins webhook endpoint..."
+              sleep 5
+            done
+
+            # The operator readiness probe does not verify the TLS webhook
+            # listener. Give it a short stabilization window after endpoint
+            # publication before Helm submits SgxDevicePlugin.
+            sleep 10
+      - events: ["postsync"]
+        showlogs: true
+        command: bash
+        args:
+          - -ec
+          - |
+            deadline=$((SECONDS + 300))
+            until kubectl get nodes \
+              --selector intel.feature.node.kubernetes.io/sgx=true \
+              --output name | grep -q .; do
+              if (( SECONDS >= deadline )); then
+                echo "NFD did not label an SGX node within 300 seconds" >&2
+                kubectl get nodes \
+                  --label-columns intel.feature.node.kubernetes.io/sgx >&2 || true
+                exit 1
+              fi
+              echo "Waiting for NFD to label an SGX node..."
+              sleep 5
+            done
+
+  # --------------------------------------------------------------------------
+  # Intel TDX QGS
+  # --------------------------------------------------------------------------
+  - name: intel-tdx-qgs
+    namespace: intel-dcap-operator-system
+    createNamespace: true
+    chart: ./intel-tdx-qgs
+    needs:
+      - intel-device-plugins/sgx-plugin
+    values:
+      - "{{ .Values.dcapValuesFile }}"
