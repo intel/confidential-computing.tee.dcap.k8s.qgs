@@ -570,14 +570,14 @@ fn write_certificate_to_file(cache_id: &str, output_dir: &Path, cert_data: &[u8]
     let filename = format!("{cache_id}_0000");
     let file_path = output_dir.join(&filename);
 
-    debug!(path = %file_path.display(), "Writing certificate to file");
+    debug!(path = %file_path.display(), "Writing PCK certificate to file");
 
     // Write the certificate data to file
     let mut file = fs::File::create(&file_path)?;
     file.write_all(cert_data)?;
     file.flush()?;
 
-    info!(path = %file_path.display(), "Certificate written successfully");
+    info!(path = %file_path.display(), "PCK certificate written successfully");
     Ok(())
 }
 
@@ -635,7 +635,7 @@ async fn watch_certificates(
     let secret_name = format!("{id}-pck");
     tracing::Span::current().record("secret", &secret_name);
 
-    info!("Starting certificate watcher");
+    info!("Starting PCK certificate watcher");
 
     // Ensure output directory exists
     if !output_dir.exists() {

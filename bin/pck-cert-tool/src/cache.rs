@@ -43,7 +43,7 @@ pub fn build_cache_blob(
     // Write TCB info
     write_field(&mut cache_data, tcb_info)?;
 
-    // Write certificate chain (keep URL-encoded)
+    // Write PCK certificate issuer chain (keep URL-encoded)
     write_field(&mut cache_data, cert_chain)?;
 
     // Write PCK certificates JSON (filtered and verified)
