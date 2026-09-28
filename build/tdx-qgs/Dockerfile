@@ -5,7 +5,7 @@
 FROM gcr.io/distroless/cc-debian13@sha256:4594d59540d1948417f6ca2829ddd9294493a7c68b7528f4dd459de7f203a750 AS final-base
 
 # Bundle source for the LGPL shared libs above (gcc-14, glibc).
-FROM rust:1.98.1-slim-trixie@sha256:3999a7ff854f315cf5f2b9a58071cb71196fdfc2ccd32fa20eedce8e754fd62a AS gpl-sources
+FROM rust:1.98.1-slim-trixie@sha256:f47a8de237dcbb0b0ce1099901e60a89728e3d51f24e664b40e947171538ade7 AS gpl-sources
 WORKDIR /gpl-sources
 # Derive package=version from the pinned base image's own dpkg database
 # instead of hardcoding, so it never drifts from the pinned digest.
@@ -31,7 +31,7 @@ RUN apt-get update \
              done; \
        done
 
-FROM rust:1.98.1-slim-trixie@sha256:3999a7ff854f315cf5f2b9a58071cb71196fdfc2ccd32fa20eedce8e754fd62a AS builder
+FROM rust:1.98.1-slim-trixie@sha256:f47a8de237dcbb0b0ce1099901e60a89728e3d51f24e664b40e947171538ade7 AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
