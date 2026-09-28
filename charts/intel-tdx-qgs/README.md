@@ -4,6 +4,7 @@ Helm chart that installs Intel® TDX DCAP Quote Generation Service (QGS) workloa
 without an operator or custom resources.
 
 This chart installs:
+- Intel® SGX Device plugin as chart dependency
 - QGS DaemonSet
 - QGS ServiceAccount and namespaced Secret RBAC
 - Registrar Deployment in `Online` mode
@@ -11,14 +12,35 @@ This chart installs:
 
 ## Prerequisites
 
-The chart does **not** install these external components:
-- Node Feature Discovery (NFD) + NodeFeatureRules
-- Intel Device Plugins Operator + SGX device plugin
-- SGX-capable nodes with label `intel.feature.node.kubernetes.io/sgx=true`
+### Deploy External Components
+
+1. Export release version:
+
+    ```bash
+    export INTEL_DEVICE_PLUGIN_VER=release-0.37
+    ```
+
+2. Deploy NFD
+
+    ```bash
+    kubectl apply -k "https://github.com/intel/intel-device-plugins-for-kubernetes/deployments/nfd?ref=$INTEL_DEVICE_PLUGIN_VER"
+    ```
+
+3. Deploy NodeFeatureRules
+
+    ```bash
+    kubectl apply -k "https://github.com/intel/intel-device-plugins-for-kubernetes/deployments/nfd/overlays/node-feature-rules?ref=$INTEL_DEVICE_PLUGIN_VER"
+    ```
+
+4. Verify the NFD is working and SGX feature is detected:
+
+    ```bash
+    kubectl get no -o json | jq .items[].metadata.labels | grep intel.feature.node.kubernetes.io/sgx
+    ```
 
 To install all external components required for full deployment use [this documentation](../STACK_DEPLOYMENT.md).
 
-## Prepare a dedicated namespace
+### Prepare a dedicated namespace
 
 The current QGS pod specification cannot run under the `baseline` or `restricted` Pod Security Standards. 
 It uses a host path for the QGS socket in all modes; `Online` and `Offline` modes additionally use a privileged platform 
@@ -87,6 +109,8 @@ unset PCCS_API_KEY
 Install Online mode and reference the existing Secret:
 
 ```bash
+helm dependency update ./charts/intel-tdx-qgs
+
 helm upgrade --install intel-tdx-dcap ./charts/intel-tdx-qgs \
   --namespace "$DCAP_NAMESPACE" \
   --set tdxQuoteGenerationService.mode=Online \
@@ -99,6 +123,8 @@ Do not use `--set pcsApiKey.apiKey=...` for production credentials: Helm stores 
 ## Offline Mode
 
 ```bash
+helm dependency update ./charts/intel-tdx-qgs
+
 helm upgrade --install intel-tdx-dcap ./charts/intel-tdx-qgs \
   --namespace "$DCAP_NAMESPACE" \
   --set tdxQuoteGenerationService.mode=Offline
@@ -107,6 +133,8 @@ helm upgrade --install intel-tdx-dcap ./charts/intel-tdx-qgs \
 ## External Mode
 
 ```bash
+helm dependency update ./charts/intel-tdx-qgs
+
 helm upgrade --install intel-tdx-dcap ./charts/intel-tdx-qgs \
   --namespace "$DCAP_NAMESPACE" \
   --set tdxQuoteGenerationService.mode=External

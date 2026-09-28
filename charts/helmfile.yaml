@@ -3,14 +3,11 @@ environments:
     values:
       - intelDevicePluginVersion: 0.37.0
       - nfdVersion: 0.19.0
-      - intelSgxPluginVersion: 0.37.0-alpha.1
       - dcapValuesFile: ./helmfile-qgs-values/tdx-qgs-online-values.yaml.gotmpl
 ---
 repositories:
   - name: nfd
     url: https://kubernetes-sigs.github.io/node-feature-discovery/charts
-  - name: intel
-    url: https://intel.github.io/helm-charts
 
 helmDefaults:
   wait: true
@@ -45,16 +42,6 @@ releases:
           - https://github.com/intel/intel-device-plugins-for-kubernetes/deployments/nfd/overlays/node-feature-rules?ref=v{{ .Values.intelDevicePluginVersion }}
 
   # --------------------------------------------------------------------------
-  # Intel SGX Device Plugin
-  # --------------------------------------------------------------------------
-  - name: intel-sgx-plugin
-    namespace: kube-system
-    chart: oci://ghcr.io/intel/intel-sgx-device-plugin
-    version: "{{ .Values.intelSgxPluginVersion }}"
-    needs:
-      - node-feature-discovery/nfd
-
-  # --------------------------------------------------------------------------
   # Intel TDX QGS
   # --------------------------------------------------------------------------
   - name: intel-tdx-qgs
@@ -62,6 +49,6 @@ releases:
     createNamespace: true
     chart: ./intel-tdx-qgs
     needs:
-      - kube-system/intel-sgx-plugin
+      - node-feature-discovery/nfd
     values:
       - "{{ .Values.dcapValuesFile }}"
