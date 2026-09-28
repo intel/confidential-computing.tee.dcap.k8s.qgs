@@ -14,3 +14,8 @@ sources:
   - https://github.com/intel/confidential-computing.tee.dcap.k8s.qgs
 maintainers:
   - name: Intel
+dependencies:
+  - name: intel-sgx-device-plugin
+    alias: intel-sgx-plugin
+    version: "0.37.0-alpha.1"
+    repository: "oci://ghcr.io/intel"

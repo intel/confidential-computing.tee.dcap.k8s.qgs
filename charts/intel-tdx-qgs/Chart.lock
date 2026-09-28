@@ -1,0 +1,6 @@
+dependencies:
+- name: intel-sgx-device-plugin
+  repository: oci://ghcr.io/intel
+  version: 0.37.0-alpha.1
+digest: sha256:fe3867029eb88d00142019a5a550ec22abdde260d2ca3bebf4b95a952a1426e7
+generated: "2026-09-28T14:08:25.969344464+02:00"
