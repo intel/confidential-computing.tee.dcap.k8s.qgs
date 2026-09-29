@@ -1,6 +1,10 @@
 image:
-  repository: intel-tdx-qgs
-  tag: latest
+  repository: docker.io/intel/intel-tdx-qgs
+  # Defaults to the chart appVersion when empty.
+  tag: ""
+  # Optional image digest (sha256:...). When set, the image is pulled by digest.
+  # Released charts pin the digest of the released image; clear it when overriding tag.
+  digest: ""
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []

@@ -30,7 +30,7 @@ spec:
       {{- end }}
       containers:
         - name: registrar
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "intel-tdx-qgs.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
             - pck-cert-tool

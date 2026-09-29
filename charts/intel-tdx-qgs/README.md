@@ -149,6 +149,12 @@ helm upgrade --install intel-tdx-dcap ./charts/intel-tdx-qgs \
   --set tdxQuoteGenerationService.mode=External
 ```
 
+## Published chart
+
+Released chart versions are published to `oci://ghcr.io/intel/intel-tdx-qgs`. To use the published chart,
+replace `./charts/intel-tdx-qgs` with `oci://ghcr.io/intel/intel-tdx-qgs --version <version>` in the commands above
+(`helm dependency update` is not needed).
+
 ## Modes
 
 - `Offline` (default): QGS and the platform-registration init container; no registrar.
@@ -169,6 +175,9 @@ kubectl get daemonsets,deployments \
 ## Values
 
 The chart's default configuration is defined in [values.yaml](./values.yaml).
+By default, the chart uses the `docker.io/intel/intel-tdx-qgs` image tagged with the chart `appVersion`;
+override it with `image.repository` and `image.tag`. Released charts also pin the image by digest
+(`image.digest`); set `image.digest=""` when overriding the image tag or repository.
 Override values with one or more values files using `--values`/`-f`, or use `--set` and `--set-string` for individual command-line overrides. 
 Values files are merged in the order supplied, and command-line overrides take precedence.
 
