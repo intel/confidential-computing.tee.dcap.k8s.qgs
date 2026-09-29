@@ -45,8 +45,8 @@ spec:
             - name: INTEL_PCS_API_KEY
               valueFrom:
                 secretKeyRef:
-                  name: {{ default (include "intel-tdx-qgs.pcsSecretName" .) .Values.tdxQuoteGenerationService.apiKeySecretName }}
-                  key: {{ .Values.pcsApiKey.secretKey }}
+                  name: {{ .Values.pcsApiKey.secretName }}
+                  key: api-key
                   optional: true
             {{- with .Values.registrar.extraEnv }}
             {{- toYaml . | nindent 12 }}

@@ -27,12 +27,3 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- define "intel-tdx-qgs.registrarName" -}}
 {{- printf "%s-registrar" .Values.tdxQuoteGenerationService.name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
-
-{{- define "intel-tdx-qgs.pcsSecretName" -}}
-{{- if .Values.pcsApiKey.existingSecret -}}
-{{- .Values.pcsApiKey.existingSecret -}}
-{{- else -}}
-{{- .Values.pcsApiKey.secretName -}}
-{{- end -}}
-{{- end -}}
-

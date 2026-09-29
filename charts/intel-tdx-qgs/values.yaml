@@ -25,16 +25,15 @@ tdxQuoteGenerationService:
   # External omits platform registration and the efivars host mount.
   mode: Offline
 
-  # Required in Online mode unless pcsApiKey.existingSecret is provided.
-  apiKeySecretName: intel-pcs-api-key
-
   # Labels in key=value format used to select QGS nodes.
   nodeSelector:
     - "intel.feature.node.kubernetes.io/sgx=true"
 
+# Intel PCS API key used by the registrar in Online mode. The key is optional:
+# without it, the registrar makes anonymous (shared rate-limited) PCS requests.
 pcsApiKey:
-  # If mode=Online and apiKey is set, the chart creates this secret.
-  existingSecret: ""
+  # Secret the registrar reads the key from (data key "api-key").
   secretName: intel-pcs-api-key
-  secretKey: api-key
+  # If set, the chart creates secretName with this key. For production, create the
+  # Secret yourself instead: Helm stores supplied values in its release Secret.
   apiKey: ""

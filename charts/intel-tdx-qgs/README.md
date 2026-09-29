@@ -92,6 +92,11 @@ Namespace creation and Pod Security label changes should remain limited to clust
 
 ## Online Mode
 
+The Intel PCS API key is optional. The registrar reads it from the Secret named by `pcsApiKey.secretName`
+(default `intel-pcs-api-key`, data key `api-key`); if the Secret does not exist, PCS requests are made without a key.
+
+> **Note:** Intel PCS enforces rate limiting on all requests. When using a personal API key for the requests, the rate limiting is enforced on this API key. In contrast, all anonymous users share the same rate limit. Thus, it is advisable to use a caching service and a personal API key in production environments.
+
 Create the PCS API key Secret outside Helm. This avoids placing the key in the command line and in Helm release values:
 
 ```bash
@@ -106,18 +111,22 @@ printf '%s' "$PCCS_API_KEY" \
 unset PCCS_API_KEY
 ```
 
-Install Online mode and reference the existing Secret:
+Install Online mode. The default `pcsApiKey.secretName` references the Secret created above;
+set `--set pcsApiKey.secretName=<name>` to use a Secret with a different name:
 
 ```bash
 helm dependency update ./charts/intel-tdx-qgs
 
 helm upgrade --install intel-tdx-dcap ./charts/intel-tdx-qgs \
   --namespace "$DCAP_NAMESPACE" \
-  --set tdxQuoteGenerationService.mode=Online \
-  --set pcsApiKey.apiKey=...
+  --set tdxQuoteGenerationService.mode=Online
 ```
 
-Do not use `--set pcsApiKey.apiKey=...` for production credentials: Helm stores supplied values in its release Secret.
+Alternatively, let the chart create the Secret with `--set pcsApiKey.apiKey=...`.
+
+> **Warning:** Helm stores supplied values unencrypted in its release Secrets, so the key is visible via
+> `helm get values` to anyone who can read Secrets in the namespace, and it remains in old revisions after rotation.
+> Prefer creating the Secret outside Helm for production credentials.
 
 
 ## Offline Mode
