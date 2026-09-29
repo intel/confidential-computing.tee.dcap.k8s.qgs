@@ -181,6 +181,9 @@ fn copy_fixed_hex_field<const N: usize>(value: &str, field: &str) -> Result<[u8;
             bytes.len()
         );
     }
+    if !bytes.iter().all(u8::is_ascii_hexdigit) {
+        bail!("{field} has invalid content: expected a {N}-character hex string, got {value:?}");
+    }
 
     let mut out = [0u8; N];
     out.copy_from_slice(bytes);
@@ -567,14 +570,14 @@ fn write_certificate_to_file(cache_id: &str, output_dir: &Path, cert_data: &[u8]
     let filename = format!("{cache_id}_0000");
     let file_path = output_dir.join(&filename);
 
-    debug!(path = %file_path.display(), "Writing certificate to file");
+    debug!(path = %file_path.display(), "Writing PCK certificate to file");
 
     // Write the certificate data to file
     let mut file = fs::File::create(&file_path)?;
     file.write_all(cert_data)?;
     file.flush()?;
 
-    info!(path = %file_path.display(), "Certificate written successfully");
+    info!(path = %file_path.display(), "PCK certificate written successfully");
     Ok(())
 }
 
@@ -632,7 +635,7 @@ async fn watch_certificates(
     let secret_name = format!("{id}-pck");
     tracing::Span::current().record("secret", &secret_name);
 
-    info!("Starting certificate watcher");
+    info!("Starting PCK certificate watcher");
 
     // Ensure output directory exists
     if !output_dir.exists() {
@@ -1211,6 +1214,25 @@ mod tests {
         }
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_copy_fixed_hex_field_accepts_valid_hex() {
+        let out = copy_fixed_hex_field::<8>("deadbeef", "test_field").expect("should succeed");
+        assert_eq!(out, *b"deadbeef");
+    }
+
+    #[test]
+    fn test_copy_fixed_hex_field_rejects_wrong_length() {
+        assert!(copy_fixed_hex_field::<8>("dead", "test_field").is_err());
+        assert!(copy_fixed_hex_field::<8>("deadbeefcafe", "test_field").is_err());
+    }
+
+    #[test]
+    fn test_copy_fixed_hex_field_rejects_non_hex_content() {
+        // Correct length, but contains non-hex characters.
+        assert!(copy_fixed_hex_field::<8>("deadbeeg", "test_field").is_err());
+        assert!(copy_fixed_hex_field::<8>("../../etc", "test_field").is_err());
     }
 
     #[test]

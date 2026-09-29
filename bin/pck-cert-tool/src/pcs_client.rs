@@ -156,7 +156,7 @@ pub async fn fetch_pck_certs(
         return Err(handle_pcs_api_error(response, url.as_str()).await);
     }
 
-    // Extract SGX-FMSPC and certificate chain headers
+    // Extract SGX-FMSPC and PCK certificate issuer chain headers
     let fmspc = response
         .headers()
         .get("SGX-FMSPC")

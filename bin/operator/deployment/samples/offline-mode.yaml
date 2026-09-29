@@ -1,11 +1,11 @@
 # Example: TdxQuoteGenerationService with Offline Platform Registration
 #
 # This example demonstrates deploying the TDX Quote Generation Service
-# for air-gapped environments where certificates are manually provisioned.
+# for air-gapped environments where PCK certificates are manually provisioned.
 #
 # In Offline mode:
 # - No registrar Deployment is created
-# - Certificates must be pre-created as Kubernetes secrets
+# - PCK certificates must be pre-created as Kubernetes secrets
 # - Secrets should be labeled with fmspc=<value> for discovery
 #
 # Prerequisites:
