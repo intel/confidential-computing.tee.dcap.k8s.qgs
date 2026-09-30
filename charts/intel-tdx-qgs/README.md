@@ -162,7 +162,7 @@ replace `./charts/intel-tdx-qgs` with `oci://ghcr.io/intel/intel-tdx-qgs --versi
 - `External`: QGS without the platform-registration init container or EFI variables mount;
   registration and PCK certificate Secrets are managed externally.
 
-The chart applies `app.kubernetes.io/mode` to managed resources and pod templates. 
+The chart applies `app.kubernetes.io/mode` to managed resources (not to pod templates).
 Its value is normalized to `online`, `offline`, or `external`. 
 For example, list workloads installed in Offline mode with:
 
