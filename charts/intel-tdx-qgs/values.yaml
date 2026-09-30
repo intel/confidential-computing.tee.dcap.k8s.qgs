@@ -41,3 +41,9 @@ pcsApiKey:
   # If set, the chart creates secretName with this key. For production, create the
   # Secret yourself instead: Helm stores supplied values in its release Secret.
   apiKey: ""
+
+# Intel SGX device plugin sub-chart. Disable if the SGX device plugin is already
+# deployed in the cluster. Other keys are passed to the sub-chart, see
+# `helm show values oci://ghcr.io/intel/intel-sgx-device-plugin`.
+intel-sgx-plugin:
+  enabled: true

@@ -178,6 +178,10 @@ The chart's default configuration is defined in [values.yaml](./values.yaml).
 By default, the chart uses the `docker.io/intel/intel-tdx-qgs` image tagged with the chart `appVersion`;
 override it with `image.repository` and `image.tag`. Released charts also pin the image by digest
 (`image.digest`); set `image.digest=""` when overriding the image tag or repository.
+
+The chart installs the Intel SGX device plugin as a sub-chart. Set `intel-sgx-plugin.enabled=false` if the plugin
+is already deployed in the cluster. Other `intel-sgx-plugin.*` values are passed to the sub-chart; list them with
+`helm show values oci://ghcr.io/intel/intel-sgx-device-plugin`.
 Override values with one or more values files using `--values`/`-f`, or use `--set` and `--set-string` for individual command-line overrides. 
 Values files are merged in the order supplied, and command-line overrides take precedence.
 
