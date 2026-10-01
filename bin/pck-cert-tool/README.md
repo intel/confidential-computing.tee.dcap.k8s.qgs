@@ -13,6 +13,9 @@ Get platform data and create Kubernetes secrets with platform manifest data.
 - Reads platform manifest from EFI variable `SgxRegistrationServerRequest-304e0796-d515-4698-ac6e-e76cb1a71c28`
 - Calls external platform info binary to get SGX platform information (CPU SVN, encrypted PPID, PCE ID, PCE SVN, QE ID)
 - Creates or updates Kubernetes secrets with platform data
+- If the EFI variable is absent (e.g. hidden by the BIOS after registration), still updates the
+  secret but without `platform_manifest`; server-side apply keeps the stored manifest, and the
+  update makes `register` re-request PCK certificates with the current CPU SVN and PCE ID
 - Labels secrets with `type=platform-data` for easy identification
 - Optionally writes the ID (a QE ID) to a plain-text file (`--id-file`) on a volume shared with
   the `pck-certs-watcher` container, so that container doesn't need SGX enclave/device access
