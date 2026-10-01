@@ -6,3 +6,4 @@
 
 pub mod cache;
 pub mod pcs_client;
+pub mod platform_data;

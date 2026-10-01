@@ -26,6 +26,10 @@ Watch platform-data secrets and automatically register them with Intel PCS to ob
 
 - Watches all secrets labeled with `type=platform-data` in the specified namespace
 - Automatically processes new or updated platform-data secrets
+- Validates platform-data secrets before use, since any node can write them: the secret name
+  must be a 32-character hex QE ID, `cpu_svn` 32 and `pce_id` 4 hex characters, and
+  `platform_manifest` must be a non-empty hex encoding of the EFI variable's structure data,
+  whose 16-bit size field limits it to 65535 bytes (131070 hex characters)
 - Sends platform manifest, PCE ID, and CPU SVN to Intel Provisioning Certification Service (PCS) API
 - Retrieves platform-specific PCK certificates from Intel PCS v4 API `/pckcerts/config` endpoint
 - Retrieves SGX TCB Info using the FMSPC from the certificate response

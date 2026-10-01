@@ -13,9 +13,9 @@ use kube::{
 };
 use pck_cert_tool::cache::build_cache_blob;
 use pck_cert_tool::pcs_client::{
-    PckCertsRequest, fetch_pck_certs, fetch_tcb_info, filter_and_verify_pck_certs,
-    validate_tcb_info,
+    fetch_pck_certs, fetch_tcb_info, filter_and_verify_pck_certs, validate_tcb_info,
 };
+use pck_cert_tool::platform_data::{QE_ID_HEX_LEN, is_fixed_len_hex, prepare_registration};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -32,9 +32,6 @@ const K8S_API_WATCH_ERROR_BACKOFF: Duration = Duration::from_secs(10);
 /// EFI variable name for SGX platform manifest
 const SGX_PLATFORM_MANIFEST_EFI_VAR: &str =
     "SgxRegistrationServerRequest-304e0796-d515-4698-ac6e-e76cb1a71c28";
-
-/// Expected length, in hex characters, of a QE ID (sgx_key_128bit_t is 16 bytes).
-const ID_HEX_LEN: usize = 32;
 
 /// Reserved all-zero QE ID, used as the QPL cache file name when the actual ID isn't
 /// guaranteed to be a real QE ID (e.g. a node name in External mode).
@@ -141,19 +138,12 @@ struct ProbePathArgs {
 }
 
 fn copy_fixed_hex_field<const N: usize>(value: &str, field: &str) -> Result<[u8; N]> {
-    let bytes = value.as_bytes();
-    if bytes.len() != N {
-        bail!(
-            "{field} has invalid length: got {} bytes, expected {N}",
-            bytes.len()
-        );
-    }
-    if !bytes.iter().all(u8::is_ascii_hexdigit) {
-        bail!("{field} has invalid content: expected a {N}-character hex string, got {value:?}");
+    if !is_fixed_len_hex::<N>(value) {
+        bail!("{field} is invalid: expected a {N}-character hex string, got {value:?}");
     }
 
     let mut out = [0u8; N];
-    out.copy_from_slice(bytes);
+    out.copy_from_slice(value.as_bytes());
     Ok(out)
 }
 
@@ -217,9 +207,9 @@ fn get_id_from_file(path: &Path) -> Result<String> {
     let contents = fs::read_to_string(path)
         .with_context(|| format!("Failed to read ID file: {}", path.display()))?;
     let id = contents.trim().to_string();
-    if id.len() != ID_HEX_LEN || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !is_fixed_len_hex::<QE_ID_HEX_LEN>(&id) {
         bail!(
-            "ID file {} has invalid content: expected a {ID_HEX_LEN}-character hex string, \
+            "ID file {} has invalid content: expected a {QE_ID_HEX_LEN}-character hex string, \
              got {:?}",
             path.display(),
             id
@@ -793,8 +783,8 @@ async fn process_platform_secret(
     // ByteString.0 contains the raw bytes which we interpret as UTF-8 hex strings
     let data = secret.data.as_ref().context("Secret has no data")?;
 
-    // Parse request body from secret data
-    let request_body = PckCertsRequest::from_secret_data(data)?;
+    // Validate the untrusted secret contents and build the request body from them
+    let request_body = prepare_registration(secret_name, data)?;
 
     info!("Requesting PCK certificates from Intel PCS API");
 
