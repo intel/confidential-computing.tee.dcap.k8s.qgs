@@ -54,9 +54,7 @@ pub struct TcbInfoResponse {
 
 impl PckCertsRequest {
     /// Create from Kubernetes secret data
-    pub(crate) fn from_secret_data(
-        data: &BTreeMap<String, k8s_openapi::ByteString>,
-    ) -> Result<Self> {
+    pub fn from_secret_data(data: &BTreeMap<String, k8s_openapi::ByteString>) -> Result<Self> {
         let platform_manifest_bytes = data
             .get("platform_manifest")
             .context("Missing platform_manifest field")?;

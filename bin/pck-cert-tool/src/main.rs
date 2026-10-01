@@ -1,11 +1,6 @@
 // Copyright(c) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-mod cache;
-mod pcs_client;
-
-use crate::cache::build_cache_blob;
-use crate::pcs_client::{PckCertsRequest, fetch_pck_certs, fetch_tcb_info};
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use clap::{Parser, Subcommand};
@@ -16,6 +11,8 @@ use kube::{
     api::{Api, Patch, PatchParams},
     runtime::{WatchStreamExt, watcher},
 };
+use pck_cert_tool::cache::build_cache_blob;
+use pck_cert_tool::pcs_client::{PckCertsRequest, fetch_pck_certs, fetch_tcb_info};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs;
