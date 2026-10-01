@@ -16,9 +16,6 @@ registrar:
   # Optional environment variables for example proxy which will be used by the registrar pod in Online mode.
   extraEnv: []
 
-rbac:
-  create: true
-
 tdxQuoteGenerationService:
   # Deploy QGS directly. No CRD or operator is installed.
   enabled: true
