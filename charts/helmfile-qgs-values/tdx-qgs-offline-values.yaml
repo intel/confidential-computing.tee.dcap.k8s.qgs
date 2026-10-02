@@ -1,2 +1,6 @@
+global:
+  nodeSelector:
+    intel.feature.node.kubernetes.io/sgx: "true"
+
 tdxQuoteGenerationService:
   mode: Offline

@@ -40,6 +40,18 @@ This chart installs:
 
 To install all external components required for full deployment use [this documentation](../STACK_DEPLOYMENT.md).
 
+### Select SGX/TDX-capable nodes
+
+The chart does not assume any node label. Set `global.nodeSelector` to labels that identify the SGX/TDX-capable
+nodes, for example the label applied by the NodeFeatureRules above:
+
+```bash
+--set-string global.nodeSelector.intel\.feature\.node\.kubernetes\.io/sgx=true
+```
+
+`global.nodeSelector` is used by both the QGS DaemonSet and the SGX device plugin sub-chart. Without a node selector,
+both are scheduled on all nodes, and their pods cannot start on nodes without SGX/TDX.
+
 ### Prepare a dedicated namespace
 
 The current QGS pod specification cannot run under the `baseline` or `restricted` Pod Security Standards. 

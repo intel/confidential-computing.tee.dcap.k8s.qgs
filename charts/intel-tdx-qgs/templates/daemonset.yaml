@@ -28,11 +28,10 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tdxQuoteGenerationService.nodeSelector }}
+      {{- with .Values.global.nodeSelector }}
       nodeSelector:
-        {{- range . }}
-        {{- $selector := splitn "=" 2 . }}
-        {{ $selector._0 }}: {{ $selector._1 | quote }}
+        {{- range $key, $value := . }}
+        {{ $key | quote }}: {{ $value | quote }}
         {{- end }}
       {{- end }}
       initContainers:

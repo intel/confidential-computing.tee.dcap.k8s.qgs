@@ -1,3 +1,10 @@
+global:
+  # Node labels selecting the SGX/TDX-capable nodes for the QGS DaemonSet and the
+  # Intel SGX device plugin sub-chart, e.g.
+  #   intel.feature.node.kubernetes.io/sgx: "true"
+  # Empty: no label is assumed and pods are scheduled on all nodes.
+  nodeSelector: {}
+
 image:
   repository: docker.io/intel/intel-tdx-qgs
   # Defaults to the chart appVersion when empty.
@@ -25,10 +32,6 @@ tdxQuoteGenerationService:
   # Online creates the registrar Deployment.
   # External omits platform registration and the efivars host mount.
   mode: Offline
-
-  # Labels in key=value format used to select QGS nodes.
-  nodeSelector:
-    - "intel.feature.node.kubernetes.io/sgx=true"
 
 # Intel PCS API key used by the registrar in Online mode. The key is optional:
 # without it, the registrar makes anonymous (shared rate-limited) PCS requests.

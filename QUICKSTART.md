@@ -81,8 +81,11 @@ Deploys QGS and PCK certificate provisioning directly, without the operator/CRD.
    helm upgrade --install intel-tdx-dcap oci://ghcr.io/intel/intel-tdx-qgs \
      --version <version> \
      --namespace intel-dcap-operator-system \
-     --set tdxQuoteGenerationService.mode=Online
+     --set tdxQuoteGenerationService.mode=Online \
+     --set-string global.nodeSelector.intel\.feature\.node\.kubernetes\.io/sgx=true
    ```
+
+   Replace the example `global.nodeSelector` label with the one that identifies your SGX/TDX-capable nodes.
 
 3. **Verify:**
 
