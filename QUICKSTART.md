@@ -64,7 +64,36 @@ This walks through a first end-to-end deployment of the TDX Quote Generation Ser
 
 ### Option B: Helm chart (without the operator)
 
-Planned — a Helm-based deployment that runs QGS and PCK certificate provisioning directly, without the operator/CRD, will be documented here once available.
+Deploys QGS and PCK certificate provisioning directly, without the operator/CRD.
+
+1. **Create the Intel PCS API key secret** (optional, Online mode only):
+
+   ```bash
+   kubectl create namespace intel-dcap-operator-system
+   kubectl create secret generic intel-pcs-api-key \
+     --from-literal=api-key=YOUR_INTEL_API_KEY \
+     --namespace intel-dcap-operator-system
+   ```
+
+2. **Install the chart** from the published release (`<version>` is the chart release version):
+
+   ```bash
+   helm upgrade --install intel-tdx-dcap oci://ghcr.io/intel/intel-tdx-qgs \
+     --version <version> \
+     --namespace intel-dcap-operator-system \
+     --set tdxQuoteGenerationService.mode=Online \
+     --set-string global.nodeSelector.intel\.feature\.node\.kubernetes\.io/sgx=true
+   ```
+
+   Replace the example `global.nodeSelector` label with the one that identifies your SGX/TDX-capable nodes.
+
+3. **Verify:**
+
+   ```bash
+   kubectl get pods -n intel-dcap-operator-system -l 'app in (intel-tdx-qgs,intel-tdx-registrar)'
+   ```
+
+See the [chart README](charts/intel-tdx-qgs/README.md) for Offline and External modes, values, and security guidance, and [STACK_DEPLOYMENT.md](charts/STACK_DEPLOYMENT.md) for a helmfile-based deployment including Node Feature Discovery and the SGX device plugin.
 
 ## Building images from source (developers)
 

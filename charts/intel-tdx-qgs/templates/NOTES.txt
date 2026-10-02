@@ -20,7 +20,7 @@ QGS is disabled by values.
 {{- if and .Values.tdxQuoteGenerationService.enabled (eq .Values.tdxQuoteGenerationService.mode "Online") }}
 
 Online mode is enabled.
-- API key secret used: {{ default (include "intel-tdx-qgs.pcsSecretName" .) .Values.tdxQuoteGenerationService.apiKeySecretName }}
+- PCS API key secret (optional): {{ .Values.pcsApiKey.secretName }}
 - Verify registrar: kubectl rollout status deployment/{{ include "intel-tdx-qgs.registrarName" . }} -n {{ .Release.Namespace }}
 
 {{- end }}

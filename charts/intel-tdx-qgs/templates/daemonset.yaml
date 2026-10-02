@@ -28,17 +28,16 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .Values.tdxQuoteGenerationService.nodeSelector }}
+      {{- with .Values.global.nodeSelector }}
       nodeSelector:
-        {{- range . }}
-        {{- $selector := splitn "=" 2 . }}
-        {{ $selector._0 }}: {{ $selector._1 | quote }}
+        {{- range $key, $value := . }}
+        {{ $key | quote }}: {{ $value | quote }}
         {{- end }}
       {{- end }}
       initContainers:
         {{- if ne .Values.tdxQuoteGenerationService.mode "External" }}
         - name: platform-registration
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "intel-tdx-qgs.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
             - pck-cert-tool
@@ -81,7 +80,7 @@ spec:
               mountPath: /run/dcap/platform
         {{- end }}
         - name: pck-certs-watcher
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "intel-tdx-qgs.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           restartPolicy: Always
           command:
@@ -140,7 +139,7 @@ spec:
             failureThreshold: 2147483647
       containers:
         - name: tdx-qgs
-          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: {{ include "intel-tdx-qgs.image" . | quote }}
           args:
             - -n=4
           securityContext:

@@ -1,6 +1,17 @@
+global:
+  # Node labels selecting the SGX/TDX-capable nodes for the QGS DaemonSet and the
+  # Intel SGX device plugin sub-chart, e.g.
+  #   intel.feature.node.kubernetes.io/sgx: "true"
+  # Empty: no label is assumed and pods are scheduled on all nodes.
+  nodeSelector: {}
+
 image:
-  repository: intel-tdx-qgs
-  tag: latest
+  repository: docker.io/intel/intel-tdx-qgs
+  # Defaults to the chart appVersion when empty.
+  tag: ""
+  # Optional image digest (sha256:...). When set, the image is pulled by digest.
+  # Released charts pin the digest of the released image; clear it when overriding tag.
+  digest: ""
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -12,9 +23,6 @@ registrar:
   # Optional environment variables for example proxy which will be used by the registrar pod in Online mode.
   extraEnv: []
 
-rbac:
-  create: true
-
 tdxQuoteGenerationService:
   # Deploy QGS directly. No CRD or operator is installed.
   enabled: true
@@ -25,16 +33,22 @@ tdxQuoteGenerationService:
   # External omits platform registration and the efivars host mount.
   mode: Offline
 
-  # Required in Online mode unless pcsApiKey.existingSecret is provided.
-  apiKeySecretName: intel-pcs-api-key
-
-  # Labels in key=value format used to select QGS nodes.
-  nodeSelector:
-    - "intel.feature.node.kubernetes.io/sgx=true"
-
+# Intel PCS API key used by the registrar in Online mode. The key is optional:
+# without it, the registrar makes anonymous (shared rate-limited) PCS requests.
 pcsApiKey:
-  # If mode=Online and apiKey is set, the chart creates this secret.
-  existingSecret: ""
+  # Secret the registrar reads the key from (data key "api-key").
   secretName: intel-pcs-api-key
-  secretKey: api-key
+  # If set, the chart creates secretName with this key. For production, create the
+  # Secret yourself instead: Helm stores supplied values in its release Secret.
   apiKey: ""
+
+# Intel SGX device plugin sub-chart. Disable if the SGX device plugin is already
+# deployed in the cluster. Other keys are passed to the sub-chart, see
+# `helm show values oci://ghcr.io/intel/intel-sgx-device-plugin`.
+intel-sgx-plugin:
+  enabled: true
+  nodeFeatureRule:
+    # Create an NFD NodeFeatureRule (cluster-scoped, requires the NFD CRDs) that applies
+    # the global.nodeSelector labels to SGX-capable nodes. Leave disabled if the labels
+    # are already applied, e.g. by the Intel device plugins NodeFeatureRules.
+    enabled: false

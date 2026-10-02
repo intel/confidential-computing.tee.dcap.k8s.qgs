@@ -28,11 +28,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-registrar" .Values.tdxQuoteGenerationService.name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "intel-tdx-qgs.pcsSecretName" -}}
-{{- if .Values.pcsApiKey.existingSecret -}}
-{{- .Values.pcsApiKey.existingSecret -}}
-{{- else -}}
-{{- .Values.pcsApiKey.secretName -}}
+{{- define "intel-tdx-qgs.image" -}}
+{{- $ref := printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) -}}
+{{- with .Values.image.digest -}}
+{{- $ref = printf "%s@%s" $ref . -}}
 {{- end -}}
+{{- $ref -}}
 {{- end -}}
-

@@ -1,7 +1,6 @@
 environments:
   default:
     values:
-      - intelDevicePluginVersion: 0.37.0
       - nfdVersion: 0.19.0
       - dcapValuesFile: ./helmfile-qgs-values/tdx-qgs-online-values.yaml.gotmpl
 ---
@@ -25,21 +24,6 @@ releases:
     createNamespace: true
     chart: nfd/node-feature-discovery
     version: "{{ .Values.nfdVersion }}"
-    hooks:
-      - events: [ "postsync" ]
-        showlogs: true
-        command: kubectl
-        args:
-          - apply
-          - -k
-          - https://github.com/intel/intel-device-plugins-for-kubernetes/deployments/nfd/overlays/node-feature-rules?ref=v{{ .Values.intelDevicePluginVersion }}
-      - events: [ "postuninstall" ]
-        showlogs: true
-        command: kubectl
-        args:
-          - delete
-          - -k
-          - https://github.com/intel/intel-device-plugins-for-kubernetes/deployments/nfd/overlays/node-feature-rules?ref=v{{ .Values.intelDevicePluginVersion }}
 
   # --------------------------------------------------------------------------
   # Intel TDX QGS
