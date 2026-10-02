@@ -4,8 +4,8 @@ Umbrella helm chart that automates Intel® TDX QGS setup.
 
 Umbrella helm chart will deploy TDX QGS with all required prerequisites:
 
-- NFD + NodeFeatureRules
-- Intel® TDX QGS
+- NFD
+- Intel® TDX QGS with the Intel® SGX device plugin and a NodeFeatureRule that labels SGX-capable nodes
 
 ## Prerequisites
 

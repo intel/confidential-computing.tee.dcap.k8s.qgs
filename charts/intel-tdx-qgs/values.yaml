@@ -47,3 +47,8 @@ pcsApiKey:
 # `helm show values oci://ghcr.io/intel/intel-sgx-device-plugin`.
 intel-sgx-plugin:
   enabled: true
+  nodeFeatureRule:
+    # Create an NFD NodeFeatureRule (cluster-scoped, requires the NFD CRDs) that applies
+    # the global.nodeSelector labels to SGX-capable nodes. Leave disabled if the labels
+    # are already applied, e.g. by the Intel device plugins NodeFeatureRules.
+    enabled: false

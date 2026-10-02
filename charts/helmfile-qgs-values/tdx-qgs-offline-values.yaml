@@ -2,5 +2,9 @@ global:
   nodeSelector:
     intel.feature.node.kubernetes.io/sgx: "true"
 
+intel-sgx-plugin:
+  nodeFeatureRule:
+    enabled: true
+
 tdxQuoteGenerationService:
   mode: Offline

@@ -52,6 +52,17 @@ nodes, for example the label applied by the NodeFeatureRules above:
 `global.nodeSelector` is used by both the QGS DaemonSet and the SGX device plugin sub-chart. Without a node selector,
 both are scheduled on all nodes, and their pods cannot start on nodes without SGX/TDX.
 
+Instead of deploying the NodeFeatureRules above, the SGX device plugin sub-chart can create a NodeFeatureRule that
+applies the `global.nodeSelector` labels to SGX-capable nodes (NFD must be installed):
+
+```bash
+--set intel-sgx-plugin.nodeFeatureRule.enabled=true \
+--set-string global.nodeSelector.intel\.feature\.node\.kubernetes\.io/sgx=true
+```
+
+The rule is cluster-scoped, so installing requires permission to create `nodefeaturerules.nfd.k8s-sigs.io`.
+By default, NFD only creates labels in the `feature.node.kubernetes.io` and `*.feature.node.kubernetes.io` namespaces.
+
 ### Prepare a dedicated namespace
 
 The current QGS pod specification cannot run under the `baseline` or `restricted` Pod Security Standards. 
