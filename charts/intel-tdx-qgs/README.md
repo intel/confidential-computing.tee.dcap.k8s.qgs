@@ -113,6 +113,31 @@ kubectl auth can-i create roles.rbac.authorization.k8s.io --namespace "$DCAP_NAM
 Both authorization checks must return `yes` for the identity installing this chart. 
 Namespace creation and Pod Security label changes should remain limited to cluster administrators.
 
+### Secrets in the namespace
+
+The QGS DaemonSet and the registrar share the `intel-tdx-dcap-qgs` ServiceAccount. Its Role grants
+`get`, `list`, `watch`, `create`, and `patch` on all Secrets in the namespace, because the
+platform-data and `<id>-pck` Secret names are only known at runtime. Pods running with this
+ServiceAccount can therefore access every Secret in the namespace, including Secrets of other
+nodes and any Secret not created by this chart. In `Online` mode this includes the Intel PCS
+API key Secret. To keep the key out of reach of the QGS pods, use `Offline` mode or run `Online`
+mode without an API key.
+
+Use a namespace dedicated to this release:
+
+- do not store unrelated Secrets in this namespace;
+- do not deploy other workloads or charts, including Node Feature Discovery, into this namespace;
+- limit the `edit` and `admin` roles in this namespace to the administrators of this release,
+  since both include read access to Secrets.
+
+Check which identities can read Secrets in the namespace:
+
+```bash
+kubectl auth can-i list secrets --namespace "$DCAP_NAMESPACE" \
+  --as=system:serviceaccount:"$DCAP_NAMESPACE":intel-tdx-dcap-qgs
+kubectl get rolebindings --namespace "$DCAP_NAMESPACE" -o wide
+```
+
 ## Online Mode
 
 The Intel PCS API key is optional. The registrar reads it from the Secret named by `pcsApiKey.secretName`

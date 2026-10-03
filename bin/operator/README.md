@@ -243,6 +243,32 @@ rules:
 | **register** | Watches platform-data, creates PCK certs | get, list, watch, create, patch |
 | **get-certificates** | Reads PCK certs, watches updates | get, watch |
 
+The QGS DaemonSet and the registrar share the `intel-tdx-dcap-qgs` ServiceAccount. Its Role grants
+`get`, `list`, `watch`, `create`, and `patch` on all Secrets in the namespace, because the
+platform-data and `<id>-pck` Secret names are only known at runtime. Pods running with this
+ServiceAccount can therefore access every Secret in the namespace, including Secrets of other
+nodes and any Secret not created by the operator. In `Online` mode this includes the Intel PCS
+API key Secret. To keep the key out of reach of the QGS pods, use `Offline` mode or run `Online`
+mode without an API key.
+
+Use a namespace dedicated to the operator, `intel-dcap-operator-system` by default or the
+namespace selected at OLM install time:
+
+- do not store unrelated Secrets in this namespace;
+- do not deploy other workloads or operators, including Node Feature Discovery, into this
+  namespace;
+- limit the `edit` and `admin` roles in this namespace to the administrators of the operator,
+  since both include read access to Secrets.
+
+Check which identities can read Secrets in the namespace:
+
+```bash
+DCAP_NAMESPACE=intel-dcap-operator-system
+kubectl auth can-i list secrets --namespace "$DCAP_NAMESPACE" \
+  --as=system:serviceaccount:"$DCAP_NAMESPACE":intel-tdx-dcap-qgs
+kubectl get rolebindings --namespace "$DCAP_NAMESPACE" -o wide
+```
+
 ## Running Locally
 
 For development and testing:
