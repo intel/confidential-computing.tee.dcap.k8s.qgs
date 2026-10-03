@@ -4,6 +4,7 @@
 //! Intel PCS (Platform Certification Service) client: HTTP requests and validation of the
 //! responses (PCK certificates, their issuer chain and TCB Info).
 
+use crate::platform_data::is_fixed_len_hex;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -26,6 +27,9 @@ const INTEL_PCS_PCKCERTS_ENDPOINT: &str = "pckcerts/config";
 
 /// Intel PCS API endpoint for TCB info (requires fmspc parameter).
 const INTEL_PCS_TCB_ENDPOINT: &str = "tcb";
+
+/// FMSPC (Family-Model-Stepping-Platform-CustomSKU) length: 6 bytes as hex.
+pub const FMSPC_HEX_LEN: usize = 12;
 
 /// Request body for Intel PCS API PCK certificates config endpoint.
 #[derive(Serialize, Debug)]
@@ -166,6 +170,7 @@ pub async fn fetch_pck_certs(
         .and_then(|v| v.to_str().ok())
         .context("Missing SGX-FMSPC header in response")?
         .to_string();
+    validate_fmspc(&fmspc)?;
 
     let cert_chain = response
         .headers()
@@ -189,9 +194,20 @@ pub async fn fetch_pck_certs(
     })
 }
 
+/// Validates an FMSPC value before it's used in the TCB Info query and as a label value.
+pub fn validate_fmspc(fmspc: &str) -> Result<()> {
+    anyhow::ensure!(
+        is_fixed_len_hex::<FMSPC_HEX_LEN>(fmspc),
+        "Invalid SGX-FMSPC: expected a {FMSPC_HEX_LEN}-character hex string, got {} bytes",
+        fmspc.len()
+    );
+    Ok(())
+}
+
 /// Fetch SGX TCB Info using the FMSPC.
 #[instrument(skip(http_client), fields(fmspc = %fmspc))]
 pub async fn fetch_tcb_info(http_client: &reqwest::Client, fmspc: &str) -> Result<TcbInfoResponse> {
+    validate_fmspc(fmspc)?;
     info!(fmspc = %fmspc, "Fetching SGX TCB Info");
     let mut tcb_url = PCS_BASE_URL
         .join(INTEL_PCS_TCB_ENDPOINT)
@@ -455,6 +471,21 @@ pub fn validate_tcb_info(tcb_info: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fmspc_validation() {
+        assert!(validate_fmspc("00906ED50000").is_ok());
+        assert!(validate_fmspc("00906ed50000").is_ok());
+        for bad in [
+            "",
+            "00906ED5000",
+            "00906ED500000",
+            "00906ED5000G",
+            "00906ED5&x=1",
+        ] {
+            assert!(validate_fmspc(bad).is_err(), "{bad:?} accepted");
+        }
+    }
 
     #[test]
     fn test_validate_tcb_info() {
