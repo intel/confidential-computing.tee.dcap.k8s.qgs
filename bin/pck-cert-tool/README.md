@@ -48,7 +48,15 @@ Watch platform-data secrets and automatically register them with Intel PCS to ob
   - PCK certificates JSON array
 - Creates new secrets with `-pck` suffix containing base64-encoded cache files
 - Labels PCK secrets with `fmspc=<value>` extracted from the SGX-FMSPC response header
-- Handles multiple concurrent registrations for parallel secret creation
+- Reconciles platform-data secrets with a Kubernetes controller: at most 4 registrations run
+  concurrently and updates to the same secret are deduplicated
+- Validates platform-data secret contents before sending anything to Intel PCS; invalid secrets
+  are not retried until they change
+- Doesn't resend platform data that Intel PCS rejected (HTTP 4xx, e.g. an invalid or
+  unregistered platform manifest, or an invalid API key) until the platform-data secret is
+  updated or the registrar restarts; other failures are retried every 5 minutes
+- Honors Intel PCS rate limiting (HTTP 429): pauses all PCS requests for the `Retry-After`
+  duration (default 1 minute, capped at 1 hour) instead of retrying
 - Uses `update=early` query parameter for TCB Info requests
 
 ### get-certificates

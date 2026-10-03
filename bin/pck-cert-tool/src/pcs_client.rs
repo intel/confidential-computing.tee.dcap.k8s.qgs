@@ -9,6 +9,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 use tracing::{debug, error, info, instrument};
 use url::Url;
 use x509_parser::der_parser::{oid, oid::Oid, parse_der};
@@ -93,10 +94,102 @@ impl PckCertsRequest {
     }
 }
 
+/// Delay assumed when Intel PCS returns 429 without a usable `Retry-After` header.
+pub const DEFAULT_RATE_LIMIT_RETRY_AFTER: Duration = Duration::from_secs(60);
+
+/// Upper bound for a `Retry-After` delay requested by Intel PCS.
+pub const MAX_RATE_LIMIT_RETRY_AFTER: Duration = Duration::from_secs(60 * 60);
+
+/// Intel PCS rejected a request with 429 Too Many Requests.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PcsRateLimited {
+    /// How long to wait before sending any further PCS requests.
+    pub retry_after: Duration,
+}
+
+impl std::fmt::Display for PcsRateLimited {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Intel PCS API rate limit exceeded, retry after {}s",
+            self.retry_after.as_secs()
+        )
+    }
+}
+
+impl std::error::Error for PcsRateLimited {}
+
+/// Intel PCS rejected a request with an error status other than 429.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PcsApiError {
+    pub status: reqwest::StatusCode,
+    pub error_code: String,
+    pub error_message: String,
+}
+
+impl PcsApiError {
+    /// Whether PCS rejected the request itself (4xx), so resending it unchanged won't help.
+    pub fn is_client_error(&self) -> bool {
+        self.status.is_client_error()
+    }
+}
+
+impl std::fmt::Display for PcsApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Intel PCS API request failed: {} (Error-Code: {}, Error-Message: {})",
+            self.status, self.error_code, self.error_message
+        )
+    }
+}
+
+impl std::error::Error for PcsApiError {}
+
+/// Holds back all Intel PCS requests after PCS rate limited the registrar.
+#[derive(Debug, Default)]
+pub struct PcsPause {
+    until: Option<Instant>,
+}
+
+impl PcsPause {
+    /// Pauses PCS requests for `duration` from `now`; never shortens an existing pause.
+    pub fn pause(&mut self, now: Instant, duration: Duration) {
+        let until = now + duration;
+        self.until = Some(self.until.map_or(until, |current| current.max(until)));
+    }
+
+    /// Returns the remaining pause, if any.
+    pub fn remaining(&self, now: Instant) -> Option<Duration> {
+        self.until
+            .filter(|until| *until > now)
+            .map(|until| until - now)
+    }
+}
+
+/// Parses a `Retry-After` header value given in delta-seconds. Missing or unparsable values
+/// (including the HTTP-date form) fall back to [`DEFAULT_RATE_LIMIT_RETRY_AFTER`]; the result is
+/// capped at [`MAX_RATE_LIMIT_RETRY_AFTER`].
+pub fn parse_retry_after(value: Option<&str>) -> Duration {
+    value
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(DEFAULT_RATE_LIMIT_RETRY_AFTER)
+        .min(MAX_RATE_LIMIT_RETRY_AFTER)
+}
+
 /// Handle Intel PCS API error response.
 async fn handle_pcs_api_error(response: reqwest::Response, url: &str) -> anyhow::Error {
     let status = response.status();
 
+    let rate_limited = (status == reqwest::StatusCode::TOO_MANY_REQUESTS).then(|| PcsRateLimited {
+        retry_after: parse_retry_after(
+            response
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok()),
+        ),
+    });
     // Extract Intel PCS API error headers (v4 documentation) before consuming response
     let error_code = response
         .headers()
@@ -134,9 +227,15 @@ async fn handle_pcs_api_error(response: reqwest::Response, url: &str) -> anyhow:
         "Intel PCS API Error"
     );
 
-    anyhow::anyhow!(
-        "Intel PCS API request failed: {status} (Error-Code: {error_code}, Error-Message: {error_message})"
-    )
+    if let Some(rate_limited) = rate_limited {
+        return anyhow::Error::new(rate_limited);
+    }
+
+    anyhow::Error::new(PcsApiError {
+        status,
+        error_code,
+        error_message,
+    })
 }
 
 /// Fetch PCK Certificates.
@@ -588,6 +687,54 @@ pub fn verify_tcb_info(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pcs_pause() {
+        let now = Instant::now();
+        let mut pause = PcsPause::default();
+        assert_eq!(pause.remaining(now), None);
+
+        pause.pause(now, Duration::from_secs(30));
+        assert_eq!(pause.remaining(now), Some(Duration::from_secs(30)));
+        assert_eq!(pause.remaining(now + Duration::from_secs(30)), None);
+
+        // A shorter pause doesn't shorten the current one, a longer one extends it
+        pause.pause(now, Duration::from_secs(10));
+        assert_eq!(pause.remaining(now), Some(Duration::from_secs(30)));
+        pause.pause(now, Duration::from_secs(60));
+        assert_eq!(pause.remaining(now), Some(Duration::from_secs(60)));
+    }
+
+    #[test]
+    fn retry_after_parsing() {
+        assert_eq!(parse_retry_after(Some("30")), Duration::from_secs(30));
+        assert_eq!(parse_retry_after(Some(" 0 ")), Duration::ZERO);
+        assert_eq!(parse_retry_after(None), DEFAULT_RATE_LIMIT_RETRY_AFTER);
+        assert_eq!(
+            parse_retry_after(Some("Wed, 21 Oct 2026 07:28:00 GMT")),
+            DEFAULT_RATE_LIMIT_RETRY_AFTER
+        );
+        assert_eq!(
+            parse_retry_after(Some("-5")),
+            DEFAULT_RATE_LIMIT_RETRY_AFTER
+        );
+        assert_eq!(
+            parse_retry_after(Some("99999999999")),
+            MAX_RATE_LIMIT_RETRY_AFTER
+        );
+    }
+
+    #[test]
+    fn rate_limited_error_is_downcastable() {
+        let err = anyhow::Error::new(PcsRateLimited {
+            retry_after: Duration::from_secs(5),
+        })
+        .context("Failed to fetch PCK certificates");
+        assert_eq!(
+            err.downcast_ref::<PcsRateLimited>().map(|e| e.retry_after),
+            Some(Duration::from_secs(5))
+        );
+    }
 
     #[test]
     fn fmspc_validation() {
