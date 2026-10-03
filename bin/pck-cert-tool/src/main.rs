@@ -364,8 +364,10 @@ async fn create_secret(
         secret["stringData"]["platform_manifest"] = serde_json::json!(manifest);
     }
 
-    // Create or update the secret using server-side apply
-    let params = PatchParams::apply(FIELD_MANAGER);
+    // Create or update the secret using server-side apply. This node's platform data is
+    // authoritative, so take over fields that other managers (e.g. `kubectl edit`) changed
+    // instead of failing with a conflict.
+    let params = PatchParams::apply(FIELD_MANAGER).force();
 
     secrets
         .patch(qe_id_str, &params, &Patch::Apply(&secret))
@@ -537,11 +539,12 @@ const PIID_INDEX_SECRET_NAME: &str = "piid-index";
 /// Patch a single `qe_id → piid` entry into the shared PIID index secret.
 ///
 /// Uses a per-`qe_id` SSA field manager so concurrent tasks patching different
-/// platforms into the same secret are always safe.
+/// platforms into the same secret are always safe. The apply is forced so that an
+/// entry changed by another manager is taken back; it only covers this platform's key.
 #[instrument(skip(secrets))]
 async fn patch_piid_index(secrets: &Api<Secret>, qe_id: &str, piid: &str) -> Result<()> {
     let field_manager = format!("{FIELD_MANAGER}/{qe_id}");
-    let params = PatchParams::apply(&field_manager);
+    let params = PatchParams::apply(&field_manager).force();
 
     let patch = serde_json::json!({
         "apiVersion": "v1",
@@ -932,8 +935,10 @@ async fn register_platform(
         },
     });
 
-    // Create or update the secret using server-side apply
-    let params = PatchParams::apply(FIELD_MANAGER);
+    // Create or update the secret using server-side apply. The certificates just fetched from
+    // Intel PCS are authoritative, so take over fields that other managers changed instead of
+    // failing with a conflict.
+    let params = PatchParams::apply(FIELD_MANAGER).force();
 
     secrets
         .patch(&pck_secret_name, &params, &Patch::Apply(&pck_secret))
