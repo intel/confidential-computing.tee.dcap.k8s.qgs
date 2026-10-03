@@ -33,6 +33,9 @@ Watch platform-data secrets and automatically register them with Intel PCS to ob
 - Sends platform manifest, PCE ID, and CPU SVN to Intel Provisioning Certification Service (PCS) API
 - Retrieves platform-specific PCK certificates from Intel PCS v4 API `/pckcerts/config` endpoint
 - Retrieves SGX TCB Info using the FMSPC from the certificate response
+- Verifies the PCK certificate issuer chain and each PCK certificate signature
+- Verifies the TCB Info ECDSA signature against the `TCB-Info-Issuer-Chain` (which must share
+  the PCK issuer chain's Root CA) and that the signed FMSPC matches the requested one
 - Creates binary cache files in SGX DCAP QPL format containing:
   - Cache header with 1-year expiration (8760 hours)
   - TCB component (platform-specific CPU SVN from secret data)

@@ -59,6 +59,9 @@ pub struct PckCertsResponse {
 pub struct TcbInfoResponse {
     /// Raw JSON body returned by the API.
     pub body: String,
+    /// Value of the `TCB-Info-Issuer-Chain` response header
+    /// (URL-encoded PEM chain: TCB Signing cert + Root CA).
+    pub issuer_chain: String,
 }
 
 impl PckCertsRequest {
@@ -230,6 +233,13 @@ pub async fn fetch_tcb_info(http_client: &reqwest::Client, fmspc: &str) -> Resul
         return Err(handle_pcs_api_error(response, tcb_url.as_str()).await);
     }
 
+    let issuer_chain = response
+        .headers()
+        .get("TCB-Info-Issuer-Chain")
+        .and_then(|v| v.to_str().ok())
+        .context("Missing TCB-Info-Issuer-Chain header in TCB info response")?
+        .to_string();
+
     let body = response
         .text()
         .await
@@ -237,7 +247,7 @@ pub async fn fetch_tcb_info(http_client: &reqwest::Client, fmspc: &str) -> Resul
 
     info!("Received SGX TCB Info");
 
-    Ok(TcbInfoResponse { body })
+    Ok(TcbInfoResponse { body, issuer_chain })
 }
 
 /// OID for the Intel SGX PCK certificate extension
@@ -258,7 +268,22 @@ struct TcbInfoDocument {
 struct TcbInfo {
     #[serde(default)]
     tcb_type: u32,
+    #[serde(default)]
+    fmspc: String,
 }
+
+/// Signed TCB Info document as returned by Intel PCS. `tcb_info` keeps the raw JSON text,
+/// since the signature covers those exact bytes.
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct SignedTcbInfo<'a> {
+    #[serde(borrow)]
+    tcb_info: &'a serde_json::value::RawValue,
+    signature: &'a str,
+}
+
+/// Length of an ECDSA P-256 signature in the fixed r||s encoding.
+const ECDSA_P256_SIGNATURE_LEN: usize = 64;
 
 /// PCK Certificate entry from Intel PCS API response
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -321,6 +346,75 @@ fn extract_piid(pem: &str) -> Result<String> {
     bail!("PIID OID (1.2.840.113741.1.13.1.6) not found in SGX PCK extension")
 }
 
+/// Decodes a URL-encoded PEM issuer chain as returned in Intel PCS response headers and
+/// validates its structure: exactly two certificates, one self-signed Root CA and one
+/// certificate signed by it. Returns `(root_der, issuer_der)`.
+fn decode_and_validate_issuer_chain(chain: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+    let decoded_chain = urlencoding::decode(chain).context("Failed to decode certificate chain")?;
+
+    let mut chain_der: Vec<Vec<u8>> = Pem::iter_from_buffer(decoded_chain.as_bytes())
+        .map(|r| {
+            r.map(|pem| pem.contents)
+                .context("Failed to parse PEM block in chain")
+        })
+        .collect::<Result<_>>()?;
+
+    if chain_der.len() != 2 {
+        bail!(
+            "Invalid certificate chain: expected 2 certificates (Root CA + issuing CA), got {}",
+            chain_der.len()
+        );
+    }
+
+    // Root CA is self-signed (verifies against its own key)
+    let (root_idx, issuer_idx) = {
+        let (_, cert0) = parse_x509_certificate(&chain_der[0])
+            .map_err(|e| anyhow!("Failed to parse certificate [0]: {e}"))?;
+        let (_, cert1) = parse_x509_certificate(&chain_der[1])
+            .map_err(|e| anyhow!("Failed to parse certificate [1]: {e}"))?;
+
+        let cert0_self_signed = cert0.verify_signature(None).is_ok();
+        let cert1_self_signed = cert1.verify_signature(None).is_ok();
+
+        let (root_idx, issuer_idx, root_cert, issuer_cert) = if cert0_self_signed
+            && !cert1_self_signed
+        {
+            (0, 1, &cert0, &cert1)
+        } else if cert1_self_signed && !cert0_self_signed {
+            (1, 0, &cert1, &cert0)
+        } else {
+            bail!(
+                "Certificate chain validation failed: cannot identify self-signed root certificate"
+            );
+        };
+
+        issuer_cert
+            .verify_signature(Some(&root_cert.tbs_certificate.subject_pki))
+            .context("Certificate chain validation failed: issuing CA is not signed by Root CA")?;
+
+        (root_idx, issuer_idx)
+    };
+    debug!(root_idx, issuer_idx, "Certificate chain validated");
+
+    let issuer_der = chain_der.swap_remove(issuer_idx);
+    let root_der = chain_der.swap_remove(0);
+    Ok((root_der, issuer_der))
+}
+
+/// Decodes a hex string of exactly `2 * N` characters into `N` bytes.
+fn decode_hex<const N: usize>(s: &str) -> Result<[u8; N]> {
+    anyhow::ensure!(
+        s.len() == 2 * N && s.bytes().all(|b| b.is_ascii_hexdigit()),
+        "expected a {}-character hex string",
+        2 * N
+    );
+    let mut bytes = [0u8; N];
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&s[2 * i..2 * i + 2], 16)?;
+    }
+    Ok(bytes)
+}
+
 /// Filter out unavailable PCK certificates from an Intel PCS `/pckcerts` response, verify the
 /// remaining ones against the issuer chain from the `SGX-PCK-Certificate-Issuer-Chain` header,
 /// and extract the PIID from the first one.
@@ -343,52 +437,11 @@ pub fn filter_and_verify_pck_certs(
 
     debug!(total = pck_certs.len(), "Total PCK certificates received");
 
-    // Decode the URL-encoded certificate chain
-    let decoded_chain =
-        urlencoding::decode(cert_chain).context("Failed to decode certificate chain")?;
-
-    // Parse the certificate chain once (optimization - avoid parsing for each cert)
-    let chain_der: Vec<Vec<u8>> = Pem::iter_from_buffer(decoded_chain.as_bytes())
-        .map(|r| {
-            r.map(|pem| pem.contents)
-                .context("Failed to parse PEM block in chain")
-        })
-        .collect::<Result<_>>()?;
-
-    // Validate chain structure: Must contain exactly 2 certificates
-    if chain_der.len() != 2 {
-        bail!(
-            "Invalid certificate chain: expected 2 certificates (Root CA + Intermediate CA), got {}",
-            chain_der.len()
-        );
-    }
-
-    // Determine which certificate is root and which is intermediate
-    // Root CA is self-signed (verifies against its own key)
-    debug!("Validating certificate chain");
-    let (_, cert0) = parse_x509_certificate(&chain_der[0])
-        .map_err(|e| anyhow!("Failed to parse certificate [0]: {e}"))?;
-    let (_, cert1) = parse_x509_certificate(&chain_der[1])
-        .map_err(|e| anyhow!("Failed to parse certificate [1]: {e}"))?;
-
-    let cert0_self_signed = cert0.verify_signature(None).is_ok();
-    let cert1_self_signed = cert1.verify_signature(None).is_ok();
-
-    let (root_cert, intermediate_cert) = if cert0_self_signed && !cert1_self_signed {
-        debug!("Certificate chain order: [0]=Root CA, [1]=Intermediate CA");
-        (cert0, cert1)
-    } else if cert1_self_signed && !cert0_self_signed {
-        debug!("Certificate chain order: [1]=Root CA, [0]=Intermediate CA");
-        (cert1, cert0)
-    } else {
-        bail!("Certificate chain validation failed: cannot identify self-signed root certificate");
-    };
-
-    // Verify that Intermediate CA is signed by Root CA
-    intermediate_cert
-        .verify_signature(Some(&root_cert.tbs_certificate.subject_pki))
-        .context("Certificate chain validation failed: Intermediate CA is not signed by Root CA")?;
-    debug!("Certificate chain validated (Root CA self-signed -> Intermediate CA)");
+    // Validate the PCK issuer chain (Root CA -> Intermediate CA)
+    let (_, intermediate_der) = decode_and_validate_issuer_chain(cert_chain)
+        .context("Invalid PCK certificate issuer chain")?;
+    let (_, intermediate_cert) = parse_x509_certificate(&intermediate_der)
+        .map_err(|e| anyhow!("Failed to parse Intermediate CA certificate: {e}"))?;
 
     let intermediate_spki = &intermediate_cert.tbs_certificate.subject_pki;
 
@@ -466,6 +519,70 @@ pub fn validate_tcb_info(tcb_info: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+/// Verifies the ECDSA P-256/SHA-256 `signature` of a signed TCB Info JSON document
+/// (`{"tcbInfo":{...},"signature":"<hex r||s>"}`) against the given uncompressed EC public key,
+/// and checks that the signed `tcbInfo.fmspc` matches the requested FMSPC.
+///
+/// The signature covers the exact bytes of the `tcbInfo` object as returned by Intel PCS,
+/// so the raw JSON text is verified rather than a re-serialization.
+fn verify_tcb_info_signature(
+    tcb_info_json: &str,
+    signer_public_key: &[u8],
+    expected_fmspc: &str,
+) -> Result<()> {
+    let signed: SignedTcbInfo<'_> =
+        serde_json::from_str(tcb_info_json).context("Failed to parse signed TCB Info JSON")?;
+
+    let signature = decode_hex::<ECDSA_P256_SIGNATURE_LEN>(signed.signature)
+        .context("Invalid TCB Info signature encoding")?;
+
+    ring::signature::UnparsedPublicKey::new(
+        &ring::signature::ECDSA_P256_SHA256_FIXED,
+        signer_public_key,
+    )
+    .verify(signed.tcb_info.get().as_bytes(), &signature)
+    .map_err(|_| anyhow!("TCB Info signature verification failed"))?;
+
+    let tcb_info: TcbInfo = serde_json::from_str(signed.tcb_info.get())
+        .context("Failed to parse signed tcbInfo object")?;
+    if !tcb_info.fmspc.eq_ignore_ascii_case(expected_fmspc) {
+        bail!(
+            "TCB Info FMSPC mismatch: requested {expected_fmspc}, signed tcbInfo has {:?}",
+            tcb_info.fmspc
+        );
+    }
+
+    Ok(())
+}
+
+/// Verifies TCB Info returned by Intel PCS: the `TCB-Info-Issuer-Chain` must be a valid
+/// Root CA -> TCB Signing chain rooted at the same Root CA as the PCK certificate issuer chain,
+/// and the TCB Info signature must verify against the TCB Signing certificate.
+pub fn verify_tcb_info(
+    tcb_info_json: &str,
+    tcb_issuer_chain: &str,
+    pck_issuer_chain: &str,
+    expected_fmspc: &str,
+) -> Result<()> {
+    let (tcb_root_der, signer_der) = decode_and_validate_issuer_chain(tcb_issuer_chain)
+        .context("Invalid TCB Info issuer chain")?;
+    let (pck_root_der, _) = decode_and_validate_issuer_chain(pck_issuer_chain)
+        .context("Invalid PCK certificate issuer chain")?;
+
+    if tcb_root_der != pck_root_der {
+        bail!("TCB Info issuer chain Root CA does not match the PCK certificate issuer Root CA");
+    }
+
+    let (_, signer_cert) = parse_x509_certificate(&signer_der)
+        .map_err(|e| anyhow!("Failed to parse TCB Signing certificate: {e}"))?;
+
+    verify_tcb_info_signature(
+        tcb_info_json,
+        &signer_cert.public_key().subject_public_key.data,
+        expected_fmspc,
+    )
 }
 
 #[cfg(test)]
@@ -578,5 +695,92 @@ mod tests {
         // Verify we can identify "Not available" certificates
         let available_count = certs.iter().filter(|c| c.cert != "Not available").count();
         assert_eq!(available_count, 2);
+    }
+
+    const REAL_TCB_INFO: &str = include_str!("../testdata/tcb_info_00906ED50000.json");
+    const REAL_TCB_CHAIN: &str = include_str!("../testdata/tcb_info_issuer_chain.txt");
+    const REAL_PCK_CHAIN: &str = include_str!("../testdata/pck_issuer_chain.txt");
+    const REAL_FMSPC: &str = "00906ED50000";
+
+    #[test]
+    fn test_verify_tcb_info_real_pcs_response() {
+        verify_tcb_info(REAL_TCB_INFO, REAL_TCB_CHAIN, REAL_PCK_CHAIN, REAL_FMSPC)
+            .expect("genuine TCB Info should verify");
+        // FMSPC comparison is case-insensitive
+        verify_tcb_info(
+            REAL_TCB_INFO,
+            REAL_TCB_CHAIN,
+            REAL_PCK_CHAIN,
+            &REAL_FMSPC.to_lowercase(),
+        )
+        .expect("genuine TCB Info should verify");
+    }
+
+    #[test]
+    fn test_verify_tcb_info_rejects_tampered_body() {
+        let tampered = REAL_TCB_INFO.replacen("\"tcbType\":0", "\"tcbType\":0 ", 1);
+        assert_ne!(tampered, REAL_TCB_INFO);
+        assert!(verify_tcb_info(&tampered, REAL_TCB_CHAIN, REAL_PCK_CHAIN, REAL_FMSPC).is_err());
+
+        let tampered = REAL_TCB_INFO.replacen("\"OutOfDate\"", "\"UpToDate\"", 1);
+        assert_ne!(tampered, REAL_TCB_INFO);
+        assert!(verify_tcb_info(&tampered, REAL_TCB_CHAIN, REAL_PCK_CHAIN, REAL_FMSPC).is_err());
+    }
+
+    #[test]
+    fn test_decode_hex() {
+        assert_eq!(decode_hex::<2>("0aFf").unwrap(), [0x0a, 0xff]);
+        for bad in ["0aF", "0aFf0", "0aFg", "+aFf", "0a\u{e9}"] {
+            assert!(decode_hex::<2>(bad).is_err(), "{bad:?} accepted");
+        }
+    }
+
+    #[test]
+    fn test_verify_tcb_info_rejects_tampered_signature() {
+        let idx = REAL_TCB_INFO.find("\"signature\":\"").unwrap() + "\"signature\":\"".len();
+        let mut tampered = REAL_TCB_INFO.to_string();
+        let flipped = if &tampered[idx..idx + 1] == "0" {
+            "1"
+        } else {
+            "0"
+        };
+        tampered.replace_range(idx..idx + 1, flipped);
+        assert!(verify_tcb_info(&tampered, REAL_TCB_CHAIN, REAL_PCK_CHAIN, REAL_FMSPC).is_err());
+
+        let unsigned = REAL_TCB_INFO.replacen("\"signature\":", "\"sig\":", 1);
+        assert!(verify_tcb_info(&unsigned, REAL_TCB_CHAIN, REAL_PCK_CHAIN, REAL_FMSPC).is_err());
+    }
+
+    #[test]
+    fn test_verify_tcb_info_rejects_fmspc_mismatch() {
+        assert!(
+            verify_tcb_info(
+                REAL_TCB_INFO,
+                REAL_TCB_CHAIN,
+                REAL_PCK_CHAIN,
+                "00606A000000"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn test_verify_tcb_info_rejects_wrong_signer() {
+        // PCK Processor CA chain is a valid Intel chain, but not the TCB Signing key
+        assert!(
+            verify_tcb_info(REAL_TCB_INFO, REAL_PCK_CHAIN, REAL_PCK_CHAIN, REAL_FMSPC).is_err()
+        );
+    }
+
+    #[test]
+    fn test_verify_tcb_info_rejects_invalid_chains() {
+        let root_only = {
+            let decoded = urlencoding::decode(REAL_TCB_CHAIN).unwrap();
+            let last = decoded.rfind("-----BEGIN CERTIFICATE-----").unwrap();
+            urlencoding::encode(&decoded[last..]).into_owned()
+        };
+        assert!(verify_tcb_info(REAL_TCB_INFO, &root_only, REAL_PCK_CHAIN, REAL_FMSPC).is_err());
+        assert!(verify_tcb_info(REAL_TCB_INFO, "", REAL_PCK_CHAIN, REAL_FMSPC).is_err());
+        assert!(verify_tcb_info(REAL_TCB_INFO, REAL_TCB_CHAIN, "", REAL_FMSPC).is_err());
     }
 }

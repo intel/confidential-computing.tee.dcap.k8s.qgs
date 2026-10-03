@@ -14,6 +14,7 @@ use kube::{
 use pck_cert_tool::cache::{build_cache_blob, parse_cache_blob};
 use pck_cert_tool::pcs_client::{
     fetch_pck_certs, fetch_tcb_info, filter_and_verify_pck_certs, validate_tcb_info,
+    verify_tcb_info,
 };
 use pck_cert_tool::platform_data::{QE_ID_HEX_LEN, is_fixed_len_hex, prepare_registration};
 use std::collections::BTreeMap;
@@ -815,6 +816,14 @@ async fn process_platform_secret(
     debug!("Validating TCB Info");
     validate_tcb_info(&tcb_info)?;
     debug!("TCB Info validation passed (tcbType=0)");
+
+    debug!("Verifying TCB Info signature");
+    verify_tcb_info(
+        &tcb_info,
+        &tcb_info_response.issuer_chain,
+        &cert_chain,
+        &fmspc,
+    )?;
 
     let (cache_data, expiration_time) = build_cache_blob(
         &request_body.cpu_svn,
