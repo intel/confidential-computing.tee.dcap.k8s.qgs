@@ -401,8 +401,8 @@ pub fn filter_and_verify_pck_certs(
                 bail!("Certificate at index {idx} failed signature verification");
             }
             Err(e) => {
-                let preview = if entry.cert.len() > 100 {
-                    format!("{}...", &entry.cert[..100])
+                let preview = if entry.cert.chars().count() > 100 {
+                    format!("{}...", entry.cert.chars().take(100).collect::<String>())
                 } else {
                     entry.cert.clone()
                 };
