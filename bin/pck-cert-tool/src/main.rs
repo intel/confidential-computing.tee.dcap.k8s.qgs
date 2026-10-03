@@ -16,7 +16,9 @@ use pck_cert_tool::pcs_client::{
     fetch_pck_certs, fetch_tcb_info, filter_and_verify_pck_certs, validate_tcb_info,
     verify_tcb_info,
 };
-use pck_cert_tool::platform_data::{QE_ID_HEX_LEN, is_fixed_len_hex, prepare_registration};
+use pck_cert_tool::platform_data::{
+    QE_ID_HEX_LEN, is_fixed_len_hex, prepare_registration, registration_fingerprint,
+};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -665,14 +667,14 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
     Ok(())
 }
 
-const ANNOTATION_PLATFORM_DATA_RV: &str =
-    "trustedservices.intel.com/platform-data-resource-version";
+const ANNOTATION_PLATFORM_DATA_FINGERPRINT: &str =
+    "trustedservices.intel.com/platform-data-fingerprint";
 const ANNOTATION_EXPIRES_AT: &str = "trustedservices.intel.com/expires-at";
 
 async fn pck_secret_is_valid(
     secrets: &Api<Secret>,
     pck_secret_name: &str,
-    platform_data_resource_version: &str,
+    platform_data_fingerprint: &str,
 ) -> Result<bool> {
     let secret = match secrets.get(pck_secret_name).await {
         Ok(secret) => secret,
@@ -688,23 +690,23 @@ async fn pck_secret_is_valid(
         return Ok(false);
     };
 
-    let Some(recorded_rv) = annotations
-        .get(ANNOTATION_PLATFORM_DATA_RV)
+    let Some(recorded_fingerprint) = annotations
+        .get(ANNOTATION_PLATFORM_DATA_FINGERPRINT)
         .map(|s| s.as_str())
     else {
         warn!(
             pck_secret = %pck_secret_name,
-            annotation = ANNOTATION_PLATFORM_DATA_RV,
-            "PCK secret is missing platform-data resource version annotation, refreshing"
+            annotation = ANNOTATION_PLATFORM_DATA_FINGERPRINT,
+            "PCK secret is missing platform-data fingerprint annotation, refreshing"
         );
         return Ok(false);
     };
-    if recorded_rv != platform_data_resource_version {
+    if recorded_fingerprint != platform_data_fingerprint {
         debug!(
             pck_secret = %pck_secret_name,
-            recorded_rv = %recorded_rv,
-            platform_data_resource_version = %platform_data_resource_version,
-            "PCK secret was created from a different platform-data version, refreshing"
+            recorded_fingerprint = %recorded_fingerprint,
+            platform_data_fingerprint = %platform_data_fingerprint,
+            "PCK secret was created from different platform data, refreshing"
         );
         return Ok(false);
     }
@@ -780,17 +782,6 @@ async fn process_platform_secret(
 
     let pck_secret_name = format!("{secret_name}-pck");
 
-    let platform_data_resource_version = secret
-        .metadata
-        .resource_version
-        .as_deref()
-        .context("Secret has no resource_version")?;
-
-    if pck_secret_is_valid(secrets, &pck_secret_name, platform_data_resource_version).await? {
-        info!(pck_secret = %pck_secret_name, "PCK secret is valid and platform data unchanged, skipping PCS call");
-        return Ok(());
-    }
-
     // Extract platform_manifest and pce_id from the secret
     // The k8s-openapi library automatically base64-decodes .data fields
     // ByteString.0 contains the raw bytes which we interpret as UTF-8 hex strings
@@ -798,6 +789,12 @@ async fn process_platform_secret(
 
     // Validate the untrusted secret contents and build the request body from them
     let request_body = prepare_registration(&secret_name, data)?;
+    let platform_data_fingerprint = registration_fingerprint(&request_body);
+
+    if pck_secret_is_valid(secrets, &pck_secret_name, &platform_data_fingerprint).await? {
+        info!(pck_secret = %pck_secret_name, "PCK secret is valid and platform data unchanged, skipping PCS call");
+        return Ok(());
+    }
 
     info!("Requesting PCK certificates from Intel PCS API");
 
@@ -847,7 +844,7 @@ async fn process_platform_secret(
             "namespace": namespace,
             "labels": labels,
             "annotations": {
-                ANNOTATION_PLATFORM_DATA_RV: platform_data_resource_version,
+                ANNOTATION_PLATFORM_DATA_FINGERPRINT: platform_data_fingerprint,
                 ANNOTATION_EXPIRES_AT: expiration_time.to_string(),
             },
         },

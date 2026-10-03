@@ -213,9 +213,17 @@ metadata:
   name: <id>-pck
   labels:
     fmspc: "<FMSPC value from SGX-FMSPC header>"
+  annotations:
+    trustedservices.intel.com/platform-data-fingerprint: "sha256:<hex>"
+    trustedservices.intel.com/expires-at: "<Unix timestamp>"
 data:
   certificate: <base64-encoded cache file>
 ```
+
+The registrar skips the Intel PCS call for a platform-data secret when its `-pck` secret is not
+expired and its `platform-data-fingerprint` matches a SHA-256 fingerprint of the fields sent to
+PCS (`platform_manifest`, `pce_id`, `cpu_svn`). Updates to a platform-data secret that don't
+change those fields (e.g. label or annotation edits) therefore don't trigger new PCS calls.
 
 The `certificate` field contains a binary cache file in the format used by Intel SGX DCAP Quote Provider Library (QPL). The cache file structure is:
 

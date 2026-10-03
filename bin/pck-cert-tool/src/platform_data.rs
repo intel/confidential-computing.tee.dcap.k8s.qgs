@@ -30,6 +30,26 @@ pub fn is_fixed_len_hex<const N: usize>(value: &str) -> bool {
     value.len() == N && value.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
+/// Returns a stable fingerprint (`sha256:<hex>`) of the registration inputs sent to Intel PCS.
+///
+/// The registrar records it on the PCK secret so that platform-data secret updates which don't
+/// change the PCS request (e.g. label/annotation edits) don't trigger new PCS calls.
+pub fn registration_fingerprint(request: &PckCertsRequest) -> String {
+    let mut ctx = ring::digest::Context::new(&ring::digest::SHA256);
+    // Length-prefix each field so that field boundaries are unambiguous
+    for field in [
+        &request.platform_manifest,
+        &request.pce_id,
+        &request.cpu_svn,
+    ] {
+        ctx.update(&(field.len() as u64).to_le_bytes());
+        ctx.update(field.as_bytes());
+    }
+    let digest = ctx.finish();
+    let hex: String = digest.as_ref().iter().map(|b| format!("{b:02x}")).collect();
+    format!("sha256:{hex}")
+}
+
 /// Builds the Intel PCS request for a platform-data secret, validating the secret name (the
 /// node's QE ID) and every field that is forwarded to Intel PCS.
 pub fn prepare_registration(
@@ -156,5 +176,47 @@ mod tests {
         let manifest = "ab".repeat(u16::MAX as usize);
         let data = with_field("platform_manifest", manifest.as_bytes());
         assert!(prepare_registration(QE_ID, &data).is_ok());
+    }
+
+    #[test]
+    fn fingerprint_is_stable_and_input_sensitive() {
+        let request = prepare_registration(QE_ID, &valid_data()).unwrap();
+        let fingerprint = registration_fingerprint(&request);
+        assert!(fingerprint.starts_with("sha256:"));
+        assert_eq!(fingerprint.len(), "sha256:".len() + 64);
+        assert_eq!(fingerprint, registration_fingerprint(&request));
+
+        // Fields not sent to PCS don't affect the fingerprint
+        let other = prepare_registration(QE_ID, &with_field("pce_svn", b"0c00")).unwrap();
+        assert_eq!(fingerprint, registration_fingerprint(&other));
+
+        for (field, value) in [
+            ("platform_manifest", "0011aabc"),
+            ("pce_id", "0001"),
+            ("cpu_svn", "0102030405060708090a0b0c0d0e0f11"),
+        ] {
+            let changed =
+                prepare_registration(QE_ID, &with_field(field, value.as_bytes())).unwrap();
+            assert_ne!(
+                fingerprint,
+                registration_fingerprint(&changed),
+                "{field} change should change the fingerprint"
+            );
+        }
+    }
+
+    #[test]
+    fn fingerprint_field_boundaries_are_unambiguous() {
+        let a = PckCertsRequest {
+            platform_manifest: "00".to_string(),
+            pce_id: "1111".to_string(),
+            cpu_svn: "22".to_string(),
+        };
+        let b = PckCertsRequest {
+            platform_manifest: "0011".to_string(),
+            pce_id: "11".to_string(),
+            cpu_svn: "22".to_string(),
+        };
+        assert_ne!(registration_fingerprint(&a), registration_fingerprint(&b));
     }
 }
