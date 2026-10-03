@@ -57,6 +57,7 @@ spec:
         volumeMounts:
         - name: efivars
           mountPath: /sys/firmware/efi/efivars
+          readOnly: true
         - name: platform-info
           mountPath: /run/dcap/platform
       - name: pck-certs-watcher
