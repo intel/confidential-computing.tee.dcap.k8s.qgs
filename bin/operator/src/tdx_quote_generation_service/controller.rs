@@ -449,11 +449,13 @@ async fn create_or_update_daemonset(
         }
     }
 
-    // Apply the DaemonSet
+    // Apply the DaemonSet. The operator is authoritative for the fields it sets, so take
+    // over fields that other managers (e.g. `kubectl edit`) changed instead of failing
+    // with a conflict.
     ds_api
         .patch(
             &daemonset_name,
-            &PatchParams::apply("tdx-qgs-operator"),
+            &PatchParams::apply("tdx-qgs-operator").force(),
             &Patch::Apply(&ds),
         )
         .await?;
@@ -542,11 +544,13 @@ async fn create_or_update_deployment(
         container.image = Some(image);
     }
 
-    // Apply the Deployment
+    // Apply the Deployment. The operator is authoritative for the fields it sets, so take
+    // over fields that other managers (e.g. `kubectl edit`) changed instead of failing
+    // with a conflict.
     deploy_api
         .patch(
             &deployment_name,
-            &PatchParams::apply("tdx-qgs-operator"),
+            &PatchParams::apply("tdx-qgs-operator").force(),
             &Patch::Apply(&deploy),
         )
         .await?;
