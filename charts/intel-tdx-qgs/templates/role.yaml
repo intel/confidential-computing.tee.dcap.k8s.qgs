@@ -14,8 +14,10 @@ rules:
       - get
       - list
       - watch
+      {{- if ne .Values.tdxQuoteGenerationService.mode "External" }}
       - create
       - patch
+      {{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
