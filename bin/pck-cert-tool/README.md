@@ -155,11 +155,12 @@ The command will:
 1. Determine the ID, either by reading the given file (`--id-file`) or using the literal value
    (`--id`)
 2. Look for a secret named `<id>-pck` in the namespace
-3. Extract the `certificate` field from the secret
+3. Extract the `certificate` field from the secret and check that it's a well-formed QPL cache
+   file; invalid content is logged and not written
 4. Write it to `<output_dir>/<cache_id>_0000`, where `cache_id` is the ID itself if it came from
    `--id-file`, or the reserved all-zero ID if it came from `--id`
 5. Continue watching for updates to the secret
-6. Rewrite the file whenever the secret is updated
+6. Rewrite the file whenever the secret is updated with valid content
 
 ## Secret Data Format
 

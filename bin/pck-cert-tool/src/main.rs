@@ -11,7 +11,7 @@ use kube::{
     api::{Api, Patch, PatchParams},
     runtime::{WatchStreamExt, watcher},
 };
-use pck_cert_tool::cache::build_cache_blob;
+use pck_cert_tool::cache::{build_cache_blob, parse_cache_blob};
 use pck_cert_tool::pcs_client::{
     fetch_pck_certs, fetch_tcb_info, filter_and_verify_pck_certs, validate_tcb_info,
 };
@@ -383,6 +383,11 @@ fn write_certificate_from_secret(
         return Ok(());
     };
 
+    if let Err(err) = parse_cache_blob(&cert_data.0) {
+        warn!(event = %event, error = %err, "Secret 'certificate' field is not a valid QPL cache blob");
+        return Ok(());
+    }
+
     write_certificate_to_file(cache_id, output_dir, cert_data.0.as_slice())
 }
 
@@ -735,8 +740,12 @@ async fn pck_secret_is_valid(
         return Ok(false);
     };
 
-    if certificate.0.is_empty() {
-        warn!(pck_secret = %pck_secret_name, "PCK secret certificate field is empty, refreshing");
+    if let Err(err) = parse_cache_blob(&certificate.0) {
+        warn!(
+            pck_secret = %pck_secret_name,
+            error = %err,
+            "PCK secret certificate field is not a valid QPL cache blob, refreshing"
+        );
         return Ok(false);
     }
 
