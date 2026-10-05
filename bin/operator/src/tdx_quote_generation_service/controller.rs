@@ -53,6 +53,10 @@ const ERROR_REQUEUE_INTERVAL: Duration = Duration::from_secs(60);
 /// Short requeue interval for resources being deleted
 const DELETE_REQUEUE_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Maximum length, in characters, of a reconcile error message stored in the status.
+/// This is a local cap to keep the status readable, not a Kubernetes API limit.
+const MAX_STATUS_MESSAGE_LEN: usize = 1024;
+
 /// Namespace the operator runs in and manages its resources in
 fn operator_namespace() -> String {
     std::env::var("OPERATOR_NAMESPACE").unwrap_or_else(|_| "default".to_string())
@@ -82,7 +86,13 @@ async fn reconcile(resource: Arc<TdxQuoteGenerationService>, ctx: Arc<Context>) 
     // Use finalizer to handle cleanup on deletion
     finalizer(&api, FINALIZER, resource, |event| async {
         match event {
-            FinalizerEvent::Apply(resource) => reconcile_resource(&resource, &ctx, &api).await,
+            FinalizerEvent::Apply(resource) => {
+                let result = reconcile_resource(&resource, &ctx, &api).await;
+                if let Err(ref e) = result {
+                    report_reconcile_error(&api, &resource, e).await;
+                }
+                result
+            }
             FinalizerEvent::Cleanup(resource) => cleanup_resource(&resource, &ctx).await,
         }
     })
@@ -629,6 +639,61 @@ async fn update_status(
     Ok(())
 }
 
+/// Message for a reconcile error in the status. For API errors, only the code, reason and
+/// message from the API server are used: the full error also includes a debug dump of the
+/// response.
+fn status_message(error: &Error) -> String {
+    match error {
+        Error::Kube(kube::Error::Api(status)) => format!(
+            "Kubernetes API error ({} {}): {}",
+            status.code, status.reason, status.message
+        ),
+        other => other.to_string(),
+    }
+}
+
+/// Report a reconcile error in the Ready condition so that it's visible on the resource.
+///
+/// The status is only patched when the reported error changes: every status patch
+/// triggers another reconciliation, so rewriting the same error would loop.
+async fn report_reconcile_error(
+    api: &Api<TdxQuoteGenerationService>,
+    resource: &TdxQuoteGenerationService,
+    error: &Error,
+) {
+    let mut message = status_message(error);
+    if let Some((idx, _)) = message.char_indices().nth(MAX_STATUS_MESSAGE_LEN) {
+        message.truncate(idx);
+    }
+
+    let already_reported = resource.status.as_ref().is_some_and(|s| {
+        s.conditions.iter().any(|c| {
+            c.condition_type == "Ready"
+                && c.reason.as_deref() == Some("ReconcileFailed")
+                && c.message.as_deref() == Some(message.as_str())
+                && c.observed_generation == resource.metadata.generation
+        })
+    });
+
+    if already_reported {
+        return;
+    }
+
+    if let Err(e) = update_status(
+        api,
+        &resource.name_any(),
+        "Ready",
+        "False",
+        "ReconcileFailed",
+        &message,
+        resource.metadata.generation,
+    )
+    .await
+    {
+        warn!(error = %e, "Failed to report reconcile error in status");
+    }
+}
+
 /// Handle errors during reconciliation
 ///
 /// This function determines the requeue strategy based on the error type.
@@ -739,6 +804,21 @@ mod tests {
             controller,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn status_message_uses_api_server_message() {
+        let error = Error::Kube(kube::Error::Api(Box::new(kube::core::Status {
+            code: 422,
+            reason: "Invalid".to_string(),
+            message: "daemonsets.apps qgs is forbidden: denied".to_string(),
+            ..Default::default()
+        })));
+        assert_eq!(
+            status_message(&error),
+            "Kubernetes API error (422 Invalid): daemonsets.apps qgs is forbidden: denied"
+        );
+        assert_eq!(status_message(&Error::Generic("boom".to_string())), "boom");
     }
 
     #[test]
