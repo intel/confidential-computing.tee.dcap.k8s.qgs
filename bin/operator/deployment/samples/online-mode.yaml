@@ -4,13 +4,21 @@
 # with automatic PCK certificate provisioning via Intel PCS.
 #
 # Prerequisites:
-# 1. Create Intel PCS API key secret:
+# 1. Ensure nodes are labeled with SGX capability:
+#    kubectl label nodes <node-name> intel.feature.node.kubernetes.io/sgx=true
+#
+# 2. Optional: create an Intel PCS API key secret. The registrar reads the key
+#    from the "api-key" field of the secret named intel-pcs-api-key (or
+#    apiKeySecretName, if set). Without the secret, PCS requests are made
+#    without a key.
 #    kubectl create secret generic intel-pcs-api-key \
 #      --from-literal=api-key=YOUR_API_KEY \
 #      --namespace=default
 #
-# 2. Ensure nodes are labeled with SGX capability:
-#    kubectl label nodes <node-name> intel.feature.node.kubernetes.io/sgx=true
+# Note: Intel PCS enforces rate limiting on all requests. When using a personal
+# API key for the requests, the rate limiting is enforced on this API key. In
+# contrast, all anonymous users share the same rate limit. Thus, it is advisable
+# to use a caching service and a personal API key in production environments.
 #
 # Apply with: kubectl apply -f online-mode.yaml
 
@@ -23,7 +31,9 @@ metadata:
     app.kubernetes.io/managed-by: intel-tdx-dcap-operator
 spec:
   platformRegistration:
-    Online:
-      apiKeySecretName: intel-pcs-api-key
+    # To read the Intel PCS API key from another secret, use:
+    #   Online:
+    #     apiKeySecretName: my-pcs-api-key
+    Online: {}
   nodeSelector:
     - "intel.feature.node.kubernetes.io/sgx=true"

@@ -186,7 +186,7 @@ Verify RBAC permissions:
 
 ```bash
 kubectl auth can-i create daemonsets \
-  --as=system:serviceaccount:intel-dcap-operator-system:default
+  --as=system:serviceaccount:intel-dcap-operator-system:intel-tdx-dcap-controller-manager
 ```
 
 ### CRD Issues
@@ -222,7 +222,7 @@ The operator uses two separate RBAC resources:
 - **Deployments**: full CRUD + delete (explicit delete when switching to Offline)
 - **Secrets**: get, list, watch, create, patch
 
-**Note:** The operator uses the `default` ServiceAccount in `intel-dcap-operator-system`. It does not create or manage ServiceAccounts, Roles, or RoleBindings at runtime — the `qgs` ServiceAccount/Role/RoleBinding used by QGS/registrar pods (see below) are static manifests applied once via `kubectl apply -k deployment/default`, not reconciled by the controller.
+**Note:** The operator runs as the dedicated `intel-tdx-dcap-controller-manager` ServiceAccount in `intel-dcap-operator-system`, so other pods in the namespace that use the `default` ServiceAccount do not get the operator permissions. It does not create or manage ServiceAccounts, Roles, or RoleBindings at runtime — the `qgs` ServiceAccount/Role/RoleBinding used by QGS/registrar pods (see below) are static manifests applied once via `kubectl apply -k deployment/default`, not reconciled by the controller.
 
 ### **2. Pod Role (statically deployed)**
 

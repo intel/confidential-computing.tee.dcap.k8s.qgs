@@ -23,6 +23,7 @@ use kube::{
     runtime::{
         controller::{Action, Controller},
         finalizer::{Event as FinalizerEvent, finalizer},
+        reflector::ObjectRef,
         watcher,
     },
 };
@@ -52,6 +53,15 @@ const ERROR_REQUEUE_INTERVAL: Duration = Duration::from_secs(60);
 /// Short requeue interval for resources being deleted
 const DELETE_REQUEUE_INTERVAL: Duration = Duration::from_secs(5);
 
+/// Maximum length, in characters, of a reconcile error message stored in the status.
+/// This is a local cap to keep the status readable, not a Kubernetes API limit.
+const MAX_STATUS_MESSAGE_LEN: usize = 1024;
+
+/// Namespace the operator runs in and manages its resources in
+fn operator_namespace() -> String {
+    std::env::var("OPERATOR_NAMESPACE").unwrap_or_else(|_| "default".to_string())
+}
+
 /// Context for the TdxQuoteGenerationService controller
 pub struct Context {
     /// Kubernetes client
@@ -76,7 +86,13 @@ async fn reconcile(resource: Arc<TdxQuoteGenerationService>, ctx: Arc<Context>) 
     // Use finalizer to handle cleanup on deletion
     finalizer(&api, FINALIZER, resource, |event| async {
         match event {
-            FinalizerEvent::Apply(resource) => reconcile_resource(&resource, &ctx, &api).await,
+            FinalizerEvent::Apply(resource) => {
+                let result = reconcile_resource(&resource, &ctx, &api).await;
+                if let Err(ref e) = result {
+                    report_reconcile_error(&api, &resource, e).await;
+                }
+                result
+            }
             FinalizerEvent::Cleanup(resource) => cleanup_resource(&resource, &ctx).await,
         }
     })
@@ -126,7 +142,7 @@ async fn reconcile_resource(
     }
 
     // Get namespace from environment variable (operator runs in this namespace)
-    let namespace = std::env::var("OPERATOR_NAMESPACE").unwrap_or_else(|_| "default".to_string());
+    let namespace = operator_namespace();
     info!("Using namespace: {}", namespace);
 
     // Create or update DaemonSet
@@ -449,11 +465,13 @@ async fn create_or_update_daemonset(
         }
     }
 
-    // Apply the DaemonSet
+    // Apply the DaemonSet. The operator is authoritative for the fields it sets, so take
+    // over fields that other managers (e.g. `kubectl edit`) changed instead of failing
+    // with a conflict.
     ds_api
         .patch(
             &daemonset_name,
-            &PatchParams::apply("tdx-qgs-operator"),
+            &PatchParams::apply("tdx-qgs-operator").force(),
             &Patch::Apply(&ds),
         )
         .await?;
@@ -542,11 +560,13 @@ async fn create_or_update_deployment(
         container.image = Some(image);
     }
 
-    // Apply the Deployment
+    // Apply the Deployment. The operator is authoritative for the fields it sets, so take
+    // over fields that other managers (e.g. `kubectl edit`) changed instead of failing
+    // with a conflict.
     deploy_api
         .patch(
             &deployment_name,
-            &PatchParams::apply("tdx-qgs-operator"),
+            &PatchParams::apply("tdx-qgs-operator").force(),
             &Patch::Apply(&deploy),
         )
         .await?;
@@ -619,6 +639,61 @@ async fn update_status(
     Ok(())
 }
 
+/// Message for a reconcile error in the status. For API errors, only the code, reason and
+/// message from the API server are used: the full error also includes a debug dump of the
+/// response.
+fn status_message(error: &Error) -> String {
+    match error {
+        Error::Kube(kube::Error::Api(status)) => format!(
+            "Kubernetes API error ({} {}): {}",
+            status.code, status.reason, status.message
+        ),
+        other => other.to_string(),
+    }
+}
+
+/// Report a reconcile error in the Ready condition so that it's visible on the resource.
+///
+/// The status is only patched when the reported error changes: every status patch
+/// triggers another reconciliation, so rewriting the same error would loop.
+async fn report_reconcile_error(
+    api: &Api<TdxQuoteGenerationService>,
+    resource: &TdxQuoteGenerationService,
+    error: &Error,
+) {
+    let mut message = status_message(error);
+    if let Some((idx, _)) = message.char_indices().nth(MAX_STATUS_MESSAGE_LEN) {
+        message.truncate(idx);
+    }
+
+    let already_reported = resource.status.as_ref().is_some_and(|s| {
+        s.conditions.iter().any(|c| {
+            c.condition_type == "Ready"
+                && c.reason.as_deref() == Some("ReconcileFailed")
+                && c.message.as_deref() == Some(message.as_str())
+                && c.observed_generation == resource.metadata.generation
+        })
+    });
+
+    if already_reported {
+        return;
+    }
+
+    if let Err(e) = update_status(
+        api,
+        &resource.name_any(),
+        "Ready",
+        "False",
+        "ReconcileFailed",
+        &message,
+        resource.metadata.generation,
+    )
+    .await
+    {
+        warn!(error = %e, "Failed to report reconcile error in status");
+    }
+}
+
 /// Handle errors during reconciliation
 ///
 /// This function determines the requeue strategy based on the error type.
@@ -663,17 +738,34 @@ fn error_policy(
     }
 }
 
+/// Map an object to the TdxQuoteGenerationService that owns it, if any.
+fn owner_ref<K: kube::Resource>(obj: K) -> Option<ObjectRef<TdxQuoteGenerationService>> {
+    obj.owner_references()
+        .iter()
+        .filter(|o| o.controller == Some(true))
+        .find_map(|o| ObjectRef::from_owner_ref(None, o, ()))
+}
+
 /// Start the TdxQuoteGenerationService controller
 ///
 /// This sets up the controller with the watcher configuration and starts
 /// the reconciliation loop.
 pub async fn run(client: Client) -> Result<()> {
     let api: Api<TdxQuoteGenerationService> = Api::all(client.clone());
+    let namespace = operator_namespace();
+    let daemonsets: Api<DaemonSet> = Api::namespaced(client.clone(), &namespace);
+    let deployments: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
     let ctx = Arc::new(Context { client });
 
     info!("Starting TdxQuoteGenerationService controller");
 
+    // Reconcile when the managed DaemonSet or Deployment changes, so that drift is
+    // corrected (and status updated) right away instead of on the next periodic requeue.
+    // `Controller::owns` can't be used: it would look up the cluster-scoped owner in
+    // the namespace of the owned object.
     Controller::new(api, watcher::Config::default())
+        .watches(daemonsets, watcher::Config::default(), owner_ref)
+        .watches(deployments, watcher::Config::default(), owner_ref)
         .run(reconcile, error_policy, ctx)
         .for_each(|res| async move {
             match res {
@@ -684,4 +776,64 @@ pub async fn run(client: Client) -> Result<()> {
         .await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kube::api::ObjectMeta;
+
+    fn daemonset_owned_by(owner: OwnerReference) -> DaemonSet {
+        DaemonSet {
+            metadata: ObjectMeta {
+                name: Some("intel-tdx-dcap-qgs".to_string()),
+                namespace: Some("intel-dcap-operator-system".to_string()),
+                owner_references: Some(vec![owner]),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn cr_owner(controller: Option<bool>) -> OwnerReference {
+        OwnerReference {
+            api_version: "trustedservices.intel.com/v1".to_string(),
+            kind: "TdxQuoteGenerationService".to_string(),
+            name: "intel-tdx-dcap".to_string(),
+            uid: "uid".to_string(),
+            controller,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn status_message_uses_api_server_message() {
+        let error = Error::Kube(kube::Error::Api(Box::new(kube::core::Status {
+            code: 422,
+            reason: "Invalid".to_string(),
+            message: "daemonsets.apps qgs is forbidden: denied".to_string(),
+            ..Default::default()
+        })));
+        assert_eq!(
+            status_message(&error),
+            "Kubernetes API error (422 Invalid): daemonsets.apps qgs is forbidden: denied"
+        );
+        assert_eq!(status_message(&Error::Generic("boom".to_string())), "boom");
+    }
+
+    #[test]
+    fn owner_ref_maps_to_cluster_scoped_owner() {
+        let owner = owner_ref(daemonset_owned_by(cr_owner(Some(true)))).unwrap();
+        assert_eq!(owner.name, "intel-tdx-dcap");
+        assert_eq!(owner.namespace, None);
+    }
+
+    #[test]
+    fn owner_ref_ignores_other_owners() {
+        assert!(owner_ref(daemonset_owned_by(cr_owner(None))).is_none());
+
+        let mut other_kind = cr_owner(Some(true));
+        other_kind.kind = "Deployment".to_string();
+        assert!(owner_ref(daemonset_owned_by(other_kind)).is_none());
+    }
 }

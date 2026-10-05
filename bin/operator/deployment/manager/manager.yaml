@@ -16,7 +16,7 @@ spec:
       labels:
         app.kubernetes.io/name: intel-dcap-operator
     spec:
-      # Uses default ServiceAccount in the namespace
+      serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 30
       securityContext:
         runAsNonRoot: true

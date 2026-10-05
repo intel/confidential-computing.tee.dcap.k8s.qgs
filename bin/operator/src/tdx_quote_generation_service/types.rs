@@ -40,6 +40,10 @@ pub struct TdxQuoteGenerationServiceSpec {
     /// Node selector labels in "key=value" format to target specific nodes
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(max = 16))]
+    #[x_kube(
+        validation = Rule::new("self.all(x, self.exists_one(y, y.split('=')[0] == x.split('=')[0]))")
+            .message("nodeSelector keys must be unique")
+    )]
     pub node_selector: Option<Vec<NodeSelectorEntry>>,
 }
 
@@ -83,12 +87,18 @@ impl JsonSchema for NodeSelectorEntry {
     }
 
     fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        // Same syntax as Kubernetes label selectors: an optional DNS subdomain prefix
+        // (<= 253 characters), a name and a non-empty value (<= 63 characters each).
+        // CEL string literals don't allow `\.`, so `[.]` matches a literal dot.
         schemars::json_schema!({
             "type": "string",
-            "maxLength": 317,
+            "maxLength": 381,
             "x-kubernetes-validations": [{
-                "rule": "self.matches('^([A-Za-z0-9][-A-Za-z0-9_.]*/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?=.+$')",
-                "message": "nodeSelector entries must be in key=value format with a non-empty key and value"
+                "rule": "self.matches('^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?([.][a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?=[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$')",
+                "message": "nodeSelector entries must be in key=value format with a valid label key and a non-empty label value"
+            }, {
+                "rule": "!self.contains('/') || self.matches('^[^/]{1,253}/')",
+                "message": "nodeSelector label key prefix must be at most 253 characters"
             }]
         })
     }

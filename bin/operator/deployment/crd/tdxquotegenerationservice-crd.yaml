@@ -34,14 +34,19 @@ spec:
               nodeSelector:
                 description: Node selector labels in "key=value" format to target specific nodes
                 items:
-                  maxLength: 317
+                  maxLength: 381
                   type: string
                   x-kubernetes-validations:
-                  - message: nodeSelector entries must be in key=value format with a non-empty key and value
-                    rule: self.matches('^([A-Za-z0-9][-A-Za-z0-9_.]*/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?=.+$')
+                  - message: nodeSelector entries must be in key=value format with a valid label key and a non-empty label value
+                    rule: self.matches('^([a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?([.][a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?=[A-Za-z0-9]([-A-Za-z0-9_.]{0,61}[A-Za-z0-9])?$')
+                  - message: nodeSelector label key prefix must be at most 253 characters
+                    rule: '!self.contains(''/'') || self.matches(''^[^/]{1,253}/'')'
                 maxItems: 16
                 nullable: true
                 type: array
+                x-kubernetes-validations:
+                - message: nodeSelector keys must be unique
+                  rule: self.all(x, self.exists_one(y, y.split('=')[0] == x.split('=')[0]))
               platformRegistration:
                 default:
                   Offline: {}
