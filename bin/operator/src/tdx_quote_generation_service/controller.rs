@@ -23,6 +23,7 @@ use kube::{
     runtime::{
         controller::{Action, Controller},
         finalizer::{Event as FinalizerEvent, finalizer},
+        reflector::ObjectRef,
         watcher,
     },
 };
@@ -51,6 +52,11 @@ const ERROR_REQUEUE_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Short requeue interval for resources being deleted
 const DELETE_REQUEUE_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Namespace the operator runs in and manages its resources in
+fn operator_namespace() -> String {
+    std::env::var("OPERATOR_NAMESPACE").unwrap_or_else(|_| "default".to_string())
+}
 
 /// Context for the TdxQuoteGenerationService controller
 pub struct Context {
@@ -126,7 +132,7 @@ async fn reconcile_resource(
     }
 
     // Get namespace from environment variable (operator runs in this namespace)
-    let namespace = std::env::var("OPERATOR_NAMESPACE").unwrap_or_else(|_| "default".to_string());
+    let namespace = operator_namespace();
     info!("Using namespace: {}", namespace);
 
     // Create or update DaemonSet
@@ -667,17 +673,34 @@ fn error_policy(
     }
 }
 
+/// Map an object to the TdxQuoteGenerationService that owns it, if any.
+fn owner_ref<K: kube::Resource>(obj: K) -> Option<ObjectRef<TdxQuoteGenerationService>> {
+    obj.owner_references()
+        .iter()
+        .filter(|o| o.controller == Some(true))
+        .find_map(|o| ObjectRef::from_owner_ref(None, o, ()))
+}
+
 /// Start the TdxQuoteGenerationService controller
 ///
 /// This sets up the controller with the watcher configuration and starts
 /// the reconciliation loop.
 pub async fn run(client: Client) -> Result<()> {
     let api: Api<TdxQuoteGenerationService> = Api::all(client.clone());
+    let namespace = operator_namespace();
+    let daemonsets: Api<DaemonSet> = Api::namespaced(client.clone(), &namespace);
+    let deployments: Api<Deployment> = Api::namespaced(client.clone(), &namespace);
     let ctx = Arc::new(Context { client });
 
     info!("Starting TdxQuoteGenerationService controller");
 
+    // Reconcile when the managed DaemonSet or Deployment changes, so that drift is
+    // corrected (and status updated) right away instead of on the next periodic requeue.
+    // `Controller::owns` can't be used: it would look up the cluster-scoped owner in
+    // the namespace of the owned object.
     Controller::new(api, watcher::Config::default())
+        .watches(daemonsets, watcher::Config::default(), owner_ref)
+        .watches(deployments, watcher::Config::default(), owner_ref)
         .run(reconcile, error_policy, ctx)
         .for_each(|res| async move {
             match res {
@@ -688,4 +711,49 @@ pub async fn run(client: Client) -> Result<()> {
         .await;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kube::api::ObjectMeta;
+
+    fn daemonset_owned_by(owner: OwnerReference) -> DaemonSet {
+        DaemonSet {
+            metadata: ObjectMeta {
+                name: Some("intel-tdx-dcap-qgs".to_string()),
+                namespace: Some("intel-dcap-operator-system".to_string()),
+                owner_references: Some(vec![owner]),
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+    }
+
+    fn cr_owner(controller: Option<bool>) -> OwnerReference {
+        OwnerReference {
+            api_version: "trustedservices.intel.com/v1".to_string(),
+            kind: "TdxQuoteGenerationService".to_string(),
+            name: "intel-tdx-dcap".to_string(),
+            uid: "uid".to_string(),
+            controller,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn owner_ref_maps_to_cluster_scoped_owner() {
+        let owner = owner_ref(daemonset_owned_by(cr_owner(Some(true)))).unwrap();
+        assert_eq!(owner.name, "intel-tdx-dcap");
+        assert_eq!(owner.namespace, None);
+    }
+
+    #[test]
+    fn owner_ref_ignores_other_owners() {
+        assert!(owner_ref(daemonset_owned_by(cr_owner(None))).is_none());
+
+        let mut other_kind = cr_owner(Some(true));
+        other_kind.kind = "Deployment".to_string();
+        assert!(owner_ref(daemonset_owned_by(other_kind)).is_none());
+    }
 }
