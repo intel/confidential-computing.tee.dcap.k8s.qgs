@@ -26,9 +26,16 @@ Watch platform-data secrets and automatically register them with Intel PCS to ob
 
 - Watches all secrets labeled with `type=platform-data` in the specified namespace
 - Automatically processes new or updated platform-data secrets
+- Validates platform-data secrets before use, since any node can write them: the secret name
+  must be a 32-character hex QE ID, `cpu_svn` 32 and `pce_id` 4 hex characters, and
+  `platform_manifest` must be a non-empty hex encoding of the EFI variable's structure data,
+  whose 16-bit size field limits it to 65535 bytes (131070 hex characters)
 - Sends platform manifest, PCE ID, and CPU SVN to Intel Provisioning Certification Service (PCS) API
 - Retrieves platform-specific PCK certificates from Intel PCS v4 API `/pckcerts/config` endpoint
 - Retrieves SGX TCB Info using the FMSPC from the certificate response
+- Verifies the PCK certificate issuer chain and each PCK certificate signature
+- Verifies the TCB Info ECDSA signature against the `TCB-Info-Issuer-Chain` (which must share
+  the PCK issuer chain's Root CA) and that the signed FMSPC matches the requested one
 - Creates binary cache files in SGX DCAP QPL format containing:
   - Cache header with 1-year expiration (8760 hours)
   - TCB component (platform-specific CPU SVN from secret data)
@@ -151,11 +158,12 @@ The command will:
 1. Determine the ID, either by reading the given file (`--id-file`) or using the literal value
    (`--id`)
 2. Look for a secret named `<id>-pck` in the namespace
-3. Extract the `certificate` field from the secret
+3. Extract the `certificate` field from the secret and check that it's a well-formed QPL cache
+   file; invalid content is logged and not written
 4. Write it to `<output_dir>/<cache_id>_0000`, where `cache_id` is the ID itself if it came from
    `--id-file`, or the reserved all-zero ID if it came from `--id`
 5. Continue watching for updates to the secret
-6. Rewrite the file whenever the secret is updated
+6. Rewrite the file whenever the secret is updated with valid content
 
 ## Secret Data Format
 

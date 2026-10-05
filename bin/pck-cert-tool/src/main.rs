@@ -1,11 +1,6 @@
 // Copyright(c) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-mod cache;
-mod pcs_client;
-
-use crate::cache::build_cache_blob;
-use crate::pcs_client::{PckCertsRequest, fetch_pck_certs, fetch_tcb_info};
 use anyhow::{Context, Result, anyhow, bail};
 use base64::Engine;
 use clap::{Parser, Subcommand};
@@ -16,7 +11,12 @@ use kube::{
     api::{Api, Patch, PatchParams},
     runtime::{WatchStreamExt, watcher},
 };
-use serde::{Deserialize, Serialize};
+use pck_cert_tool::cache::{build_cache_blob, parse_cache_blob};
+use pck_cert_tool::pcs_client::{
+    fetch_pck_certs, fetch_tcb_info, filter_and_verify_pck_certs, validate_tcb_info,
+    verify_tcb_info,
+};
+use pck_cert_tool::platform_data::{QE_ID_HEX_LEN, is_fixed_len_hex, prepare_registration};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -26,10 +26,6 @@ use std::process::Command;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{debug, error, info, instrument, warn};
-use x509_parser::der_parser::{oid, oid::Oid, parse_der};
-use x509_parser::pem::Pem;
-use x509_parser::prelude::{parse_x509_certificate, parse_x509_pem};
-use x509_parser::x509::SubjectPublicKeyInfo;
 
 /// Backoff delay between watch error retries to prevent log storms during API server downtime.
 const K8S_API_WATCH_ERROR_BACKOFF: Duration = Duration::from_secs(10);
@@ -38,40 +34,9 @@ const K8S_API_WATCH_ERROR_BACKOFF: Duration = Duration::from_secs(10);
 const SGX_PLATFORM_MANIFEST_EFI_VAR: &str =
     "SgxRegistrationServerRequest-304e0796-d515-4698-ac6e-e76cb1a71c28";
 
-/// Expected length, in hex characters, of a QE ID (sgx_key_128bit_t is 16 bytes).
-const ID_HEX_LEN: usize = 32;
-
 /// Reserved all-zero QE ID, used as the QPL cache file name when the actual ID isn't
 /// guaranteed to be a real QE ID (e.g. a node name in External mode).
 const ZERO_ID: &str = "00000000000000000000000000000000";
-
-/// OID for the Intel SGX PCK certificate extension
-const SGX_PCK_EXT_OID: Oid<'static> = oid!(1.2.840.113741.1.13.1);
-
-/// OID for the Platform Instance ID (PIID) within the SGX PCK extension — 16-byte octet string
-const SGX_PIID_OID: Oid<'static> = oid!(1.2.840.113741.1.13.1.6);
-
-/// TCB Info structure for validation (partial - only fields we need)
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct TcbInfoResponse {
-    tcb_info: TcbInfo,
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct TcbInfo {
-    #[serde(default)]
-    tcb_type: u32,
-}
-
-/// PCK Certificate entry from Intel PCS API response
-#[derive(Deserialize, Serialize, Debug, Clone)]
-struct PckCertEntry {
-    tcb: serde_json::Value,
-    tcbm: String,
-    cert: String,
-}
 
 /// Platform info fields returned by the external platform-info binary:
 /// (cpu_svn, enc_ppid, pce_id, pce_svn, qe_id) — enc_ppid is present in binary output but not used
@@ -174,19 +139,12 @@ struct ProbePathArgs {
 }
 
 fn copy_fixed_hex_field<const N: usize>(value: &str, field: &str) -> Result<[u8; N]> {
-    let bytes = value.as_bytes();
-    if bytes.len() != N {
-        bail!(
-            "{field} has invalid length: got {} bytes, expected {N}",
-            bytes.len()
-        );
-    }
-    if !bytes.iter().all(u8::is_ascii_hexdigit) {
-        bail!("{field} has invalid content: expected a {N}-character hex string, got {value:?}");
+    if !is_fixed_len_hex::<N>(value) {
+        bail!("{field} is invalid: expected a {N}-character hex string, got {value:?}");
     }
 
     let mut out = [0u8; N];
-    out.copy_from_slice(bytes);
+    out.copy_from_slice(value.as_bytes());
     Ok(out)
 }
 
@@ -250,9 +208,9 @@ fn get_id_from_file(path: &Path) -> Result<String> {
     let contents = fs::read_to_string(path)
         .with_context(|| format!("Failed to read ID file: {}", path.display()))?;
     let id = contents.trim().to_string();
-    if id.len() != ID_HEX_LEN || !id.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !is_fixed_len_hex::<QE_ID_HEX_LEN>(&id) {
         bail!(
-            "ID file {} has invalid content: expected a {ID_HEX_LEN}-character hex string, \
+            "ID file {} has invalid content: expected a {QE_ID_HEX_LEN}-character hex string, \
              got {:?}",
             path.display(),
             id
@@ -271,177 +229,6 @@ fn write_id_file(path: &Path, id: &str) -> Result<()> {
     fs::write(path, id).with_context(|| format!("Failed to write ID file: {}", path.display()))?;
     debug!(path = %path.display(), "Wrote ID file");
     Ok(())
-}
-
-/// Verify a PCK certificate against the SGX Intermediate CA's public key
-fn verify_certificate(cert_pem: &str, issuer_spki: &SubjectPublicKeyInfo<'_>) -> Result<bool> {
-    let (_, pem) = parse_x509_pem(cert_pem.as_bytes())
-        .map_err(|e| anyhow!("Failed to parse PCK certificate PEM: {e}"))?;
-    let (_, cert) = parse_x509_certificate(&pem.contents)
-        .map_err(|e| anyhow!("Failed to parse PCK certificate: {e}"))?;
-    Ok(cert.verify_signature(Some(issuer_spki)).is_ok())
-}
-
-fn extract_piid(pem: &str) -> Result<String> {
-    let (_, pem_obj) =
-        parse_x509_pem(pem.as_bytes()).map_err(|e| anyhow!("Failed to parse PEM: {e}"))?;
-    let (_, cert) = parse_x509_certificate(&pem_obj.contents)
-        .map_err(|e| anyhow!("Failed to parse certificate: {e}"))?;
-
-    let ext = cert
-        .get_extension_unique(&SGX_PCK_EXT_OID)
-        .context("Duplicate SGX PCK extension in certificate")?
-        .context("SGX PCK extension not found in certificate")?;
-
-    let (_, outer) =
-        parse_der(ext.value).map_err(|e| anyhow!("Failed to parse SGX extension DER: {e}"))?;
-
-    for item in outer
-        .as_sequence()
-        .context("SGX extension is not a SEQUENCE")?
-    {
-        let inner = item
-            .as_sequence()
-            .context("SGX sub-extension is not a SEQUENCE")?;
-
-        if inner.len() < 2 {
-            continue;
-        }
-
-        let item_oid = inner[0].as_oid_val().context("Failed to parse sub-OID")?;
-
-        if item_oid == SGX_PIID_OID {
-            let bytes = inner[1]
-                .as_slice()
-                .context("PIID value is not an OCTET STRING")?;
-
-            if bytes.len() != 16 {
-                bail!("Expected 16 bytes for PIID, got {}", bytes.len());
-            }
-
-            return Ok(bytes.iter().map(|b| format!("{b:02x}")).collect());
-        }
-    }
-
-    bail!("PIID OID (1.2.840.113741.1.13.1.6) not found in SGX PCK extension")
-}
-
-/// Filter and verify PCK certificates
-#[instrument(skip(pck_certs_json, cert_chain))]
-fn filter_and_verify_pck_certs(pck_certs_json: &str, cert_chain: &str) -> Result<(String, String)> {
-    // Parse the JSON array
-    let pck_certs: Vec<PckCertEntry> =
-        serde_json::from_str(pck_certs_json).context("Failed to parse PCK certificates JSON")?;
-
-    debug!(total = pck_certs.len(), "Total PCK certificates received");
-
-    // Decode the URL-encoded certificate chain
-    let decoded_chain =
-        urlencoding::decode(cert_chain).context("Failed to decode certificate chain")?;
-
-    // Parse the certificate chain once (optimization - avoid parsing for each cert)
-    let chain_der: Vec<Vec<u8>> = Pem::iter_from_buffer(decoded_chain.as_bytes())
-        .map(|r| {
-            r.map(|pem| pem.contents)
-                .context("Failed to parse PEM block in chain")
-        })
-        .collect::<Result<_>>()?;
-
-    // Validate chain structure: Must contain exactly 2 certificates
-    if chain_der.len() != 2 {
-        bail!(
-            "Invalid certificate chain: expected 2 certificates (Root CA + Intermediate CA), got {}",
-            chain_der.len()
-        );
-    }
-
-    // Determine which certificate is root and which is intermediate
-    // Root CA is self-signed (verifies against its own key)
-    debug!("Validating certificate chain");
-    let (_, cert0) = parse_x509_certificate(&chain_der[0])
-        .map_err(|e| anyhow!("Failed to parse certificate [0]: {e}"))?;
-    let (_, cert1) = parse_x509_certificate(&chain_der[1])
-        .map_err(|e| anyhow!("Failed to parse certificate [1]: {e}"))?;
-
-    let cert0_self_signed = cert0.verify_signature(None).is_ok();
-    let cert1_self_signed = cert1.verify_signature(None).is_ok();
-
-    let (root_cert, intermediate_cert) = if cert0_self_signed && !cert1_self_signed {
-        debug!("Certificate chain order: [0]=Root CA, [1]=Intermediate CA");
-        (cert0, cert1)
-    } else if cert1_self_signed && !cert0_self_signed {
-        debug!("Certificate chain order: [1]=Root CA, [0]=Intermediate CA");
-        (cert1, cert0)
-    } else {
-        bail!("Certificate chain validation failed: cannot identify self-signed root certificate");
-    };
-
-    // Verify that Intermediate CA is signed by Root CA
-    intermediate_cert
-        .verify_signature(Some(&root_cert.tbs_certificate.subject_pki))
-        .context("Certificate chain validation failed: Intermediate CA is not signed by Root CA")?;
-    debug!("Certificate chain validated (Root CA self-signed -> Intermediate CA)");
-
-    let intermediate_spki = &intermediate_cert.tbs_certificate.subject_pki;
-
-    // Filter out "Not available" certificates and verify remaining ones
-    let mut filtered_certs = Vec::new();
-    let mut skipped_unavailable = 0;
-
-    for (idx, entry) in pck_certs.into_iter().enumerate() {
-        if entry.cert == "Not available" {
-            skipped_unavailable += 1;
-            continue;
-        }
-
-        // URL-decode the certificate for verification, but keep original format for storage
-        let decoded_cert = urlencoding::decode(&entry.cert)
-            .context(format!("Failed to URL-decode certificate at index {idx}"))?;
-
-        // Verify the PCK certificate against the Intermediate CA
-        // Fail immediately if verification fails
-        match verify_certificate(&decoded_cert, intermediate_spki) {
-            Ok(true) => {
-                // Store the entry with the original URL-encoded certificate
-                filtered_certs.push(entry);
-            }
-            Ok(false) => {
-                bail!("Certificate at index {idx} failed signature verification");
-            }
-            Err(e) => {
-                let preview = if entry.cert.len() > 100 {
-                    format!("{}...", &entry.cert[..100])
-                } else {
-                    entry.cert.clone()
-                };
-                bail!(
-                    "Certificate at index {idx} verification error: {e}\nCert preview: {preview}"
-                );
-            }
-        }
-    }
-
-    if filtered_certs.is_empty() {
-        bail!("No valid PCK certificates found after filtering");
-    }
-
-    info!(
-        valid = filtered_certs.len(),
-        unavailable = skipped_unavailable,
-        "Filtered PCK certificates"
-    );
-
-    // Serialize back to JSON
-    let filtered_json = serde_json::to_string(&filtered_certs)
-        .context("Failed to serialize filtered certificates")?;
-
-    // Extract PIID from the topmost (first) certificate in the filtered list
-    let first_cert_pem = urlencoding::decode(&filtered_certs[0].cert)
-        .context("Failed to URL-decode first PCK certificate")?;
-    let piid = extract_piid(&first_cert_pem)
-        .context("Failed to extract PIID from first PCK certificate")?;
-
-    Ok((filtered_json, piid))
 }
 
 fn get_platform_manifest() -> Result<Option<String>> {
@@ -596,6 +383,11 @@ fn write_certificate_from_secret(
         warn!(event = %event, "Secret has no 'certificate' field");
         return Ok(());
     };
+
+    if let Err(err) = parse_cache_blob(&cert_data.0) {
+        warn!(event = %event, error = %err, "Secret 'certificate' field is not a valid QPL cache blob");
+        return Ok(());
+    }
 
     write_certificate_to_file(cache_id, output_dir, cert_data.0.as_slice())
 }
@@ -949,8 +741,12 @@ async fn pck_secret_is_valid(
         return Ok(false);
     };
 
-    if certificate.0.is_empty() {
-        warn!(pck_secret = %pck_secret_name, "PCK secret certificate field is empty, refreshing");
+    if let Err(err) = parse_cache_blob(&certificate.0) {
+        warn!(
+            pck_secret = %pck_secret_name,
+            error = %err,
+            "PCK secret certificate field is not a valid QPL cache blob, refreshing"
+        );
         return Ok(false);
     }
 
@@ -997,8 +793,8 @@ async fn process_platform_secret(
     // ByteString.0 contains the raw bytes which we interpret as UTF-8 hex strings
     let data = secret.data.as_ref().context("Secret has no data")?;
 
-    // Parse request body from secret data
-    let request_body = PckCertsRequest::from_secret_data(data)?;
+    // Validate the untrusted secret contents and build the request body from them
+    let request_body = prepare_registration(secret_name, data)?;
 
     info!("Requesting PCK certificates from Intel PCS API");
 
@@ -1018,17 +814,16 @@ async fn process_platform_secret(
 
     // Validate TCB Info structure
     debug!("Validating TCB Info");
-    let tcb_info_parsed: TcbInfoResponse =
-        serde_json::from_str(&tcb_info).context("Failed to parse TCB Info JSON response")?;
-
-    if tcb_info_parsed.tcb_info.tcb_type != 0 {
-        bail!(
-            "Invalid TCB Info: tcbType must be 0 (Standard SGX), got {}. \
-             This tool only supports standard SGX TCB Info (tcbType=0).",
-            tcb_info_parsed.tcb_info.tcb_type
-        );
-    }
+    validate_tcb_info(&tcb_info)?;
     debug!("TCB Info validation passed (tcbType=0)");
+
+    debug!("Verifying TCB Info signature");
+    verify_tcb_info(
+        &tcb_info,
+        &tcb_info_response.issuer_chain,
+        &cert_chain,
+        &fmspc,
+    )?;
 
     let (cache_data, expiration_time) = build_cache_blob(
         &request_body.cpu_svn,
@@ -1269,88 +1064,5 @@ mod tests {
     #[test]
     fn test_resolve_id_neither_source_errors() {
         assert!(resolve_id(None, None).is_err());
-    }
-
-    #[test]
-    fn test_tcb_info_validation_success() {
-        // Test valid TCB info with tcbType = 0
-        let valid_tcb_json = r#"{
-            "tcbInfo": {
-                "version": 3,
-                "issueDate": "2024-01-01T00:00:00Z",
-                "nextUpdate": "2024-02-01T00:00:00Z",
-                "fmspc": "00906ED50000",
-                "pceId": "0000",
-                "tcbType": 0,
-                "tcbEvaluationDataNumber": 12
-            }
-        }"#;
-
-        let result: Result<TcbInfoResponse, _> = serde_json::from_str(valid_tcb_json);
-        assert!(result.is_ok());
-        let tcb_info = result.unwrap();
-        assert_eq!(tcb_info.tcb_info.tcb_type, 0);
-    }
-
-    #[test]
-    fn test_tcb_info_validation_invalid_type() {
-        // Test invalid TCB info with tcbType = 1
-        let invalid_tcb_json = r#"{
-            "tcbInfo": {
-                "version": 3,
-                "tcbType": 1
-            }
-        }"#;
-
-        let result: Result<TcbInfoResponse, _> = serde_json::from_str(invalid_tcb_json);
-        assert!(result.is_ok());
-        let tcb_info = result.unwrap();
-        assert_eq!(tcb_info.tcb_info.tcb_type, 1);
-    }
-
-    #[test]
-    fn test_tcb_info_missing_type_defaults_to_zero() {
-        // Test TCB info without tcbType field (should default to 0)
-        let missing_type_json = r#"{
-            "tcbInfo": {
-                "version": 3
-            }
-        }"#;
-
-        let result: Result<TcbInfoResponse, _> = serde_json::from_str(missing_type_json);
-        assert!(result.is_ok());
-        let tcb_info = result.unwrap();
-        assert_eq!(tcb_info.tcb_info.tcb_type, 0);
-    }
-
-    #[test]
-    fn test_pck_cert_filtering() {
-        // Test PCK certificate filtering
-        let pck_certs_json = r#"[
-            {
-                "tcb": {"sgxtcbcomponents": []},
-                "tcbm": "0000",
-                "cert": "-----BEGIN CERTIFICATE-----\nMIICert1\n-----END CERTIFICATE-----"
-            },
-            {
-                "tcb": {"sgxtcbcomponents": []},
-                "tcbm": "0001",
-                "cert": "Not available"
-            },
-            {
-                "tcb": {"sgxtcbcomponents": []},
-                "tcbm": "0002",
-                "cert": "-----BEGIN CERTIFICATE-----\nMIICert2\n-----END CERTIFICATE-----"
-            }
-        ]"#;
-
-        let parsed: Result<Vec<PckCertEntry>, _> = serde_json::from_str(pck_certs_json);
-        assert!(parsed.is_ok());
-        let certs = parsed.unwrap();
-        assert_eq!(certs.len(), 3);
-
-        // Verify we can identify "Not available" certificates
-        let available_count = certs.iter().filter(|c| c.cert != "Not available").count();
-        assert_eq!(available_count, 2);
     }
 }

@@ -34,15 +34,19 @@ SKIP_BUILD="${SKIP_BUILD:-0}"
 # Set KIND_NODE_IMAGE to override the k8s node image (e.g. kindest/node:v1.37.0@sha256:...).
 KIND_NODE_IMAGE="${KIND_NODE_IMAGE:-}"
 
-# Certificate content written to each -pck secret and verified in the pods.
-TEST_CERT="e2e-test-certificate-placeholder"
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 log()  { echo "==> $*"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
+
+# Minimal QPL cache blob written to each -pck secret: version 1, multi-certs flag, zero
+# expiration and four empty length-prefixed fields.
+test_cache_blob() {
+    printf '\x01\x00\x04\x00\x00\x00'
+    printf '\x00%.0s' {1..24}
+}
 
 cleanup() {
     [[ "${KEEP_CLUSTER:-0}" == "1" ]] && return
@@ -228,7 +232,7 @@ log "Creating -pck secrets"
 for QE_ID in $PLATFORM_DATA_SECRETS; do
     kubectl create secret generic "${QE_ID}-pck" \
         -n "$QGS_NAMESPACE" \
-        --from-literal="certificate=${TEST_CERT}" \
+        --from-file=certificate=<(test_cache_blob) \
         --dry-run=client -o yaml | kubectl apply -f -
 done
 
@@ -296,7 +300,7 @@ log "Creating <node-name>-pck secrets"
 for NODE in $SGX_NODES; do
     kubectl create secret generic "${NODE}-pck" \
         -n "$QGS_NAMESPACE" \
-        --from-literal="certificate=${TEST_CERT}" \
+        --from-file=certificate=<(test_cache_blob) \
         --dry-run=client -o yaml | kubectl apply -f -
 done
 
