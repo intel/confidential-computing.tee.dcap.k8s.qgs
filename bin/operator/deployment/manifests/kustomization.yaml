@@ -2,8 +2,8 @@ resources:
 - ../default
 - ../samples
 - bases/intel-tdx-dcap-operator.clusterserviceversion.yaml
-- scc-clusterrole.yaml
-- scc-clusterrolebinding.yaml
+- scc-role.yaml
+- scc-rolebinding.yaml
 
 patches:
 - path: patches/qgs-env.yaml
