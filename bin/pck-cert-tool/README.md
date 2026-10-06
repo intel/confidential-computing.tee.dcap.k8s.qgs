@@ -11,6 +11,7 @@ Get platform data and create Kubernetes secrets with platform manifest data.
 #### Features
 
 - Reads platform manifest from EFI variable `SgxRegistrationServerRequest-304e0796-d515-4698-ac6e-e76cb1a71c28`
+  in `/sys/firmware/efi/efivars`, or in the directory given with `--efivars-dir`
 - Calls external platform info binary to get SGX platform information (CPU SVN, encrypted PPID, PCE ID, PCE SVN, QE ID)
 - Creates or updates Kubernetes secrets with platform data
 - If the EFI variable is absent (e.g. hidden by the BIOS after registration), still updates the
@@ -96,6 +97,14 @@ Short options:
 
 ```bash
 sudo ./target/release/pck-cert-tool get-platforms -p /path/to/get-platform-info -n my-namespace
+```
+
+Read the EFI variables from another directory. Container runtimes mask `/sys/firmware` in
+unprivileged containers, so mount the host's `/sys/firmware/efi/efivars` elsewhere, e.g.
+`/run/efivars`:
+
+```bash
+pck-cert-tool get-platforms -p /path/to/get-platform-info -e /run/efivars -n my-namespace
 ```
 
 ### register command

@@ -76,6 +76,12 @@ struct GetPlatformsArgs {
     /// Kubernetes namespace (default: default)
     #[arg(short, long, default_value = "default")]
     namespace: String,
+
+    /// Directory where the host efivarfs is mounted. Mounting it outside /sys/firmware
+    /// avoids the container runtime's masked /sys/firmware path, so the container doesn't
+    /// need to be privileged.
+    #[arg(short, long, default_value = "/sys/firmware/efi/efivars")]
+    efivars_dir: PathBuf,
 }
 
 #[derive(Parser, Debug)]
@@ -282,11 +288,12 @@ fn get_platform_manifest(efivars_dir: &Path) -> Result<Option<String>> {
     Ok(Some(manifest))
 }
 
-#[instrument(name = "get-platforms", skip(platform_info_binary, id_file), fields(namespace = %namespace, secret = tracing::field::Empty))]
+#[instrument(name = "get-platforms", skip(platform_info_binary, id_file, efivars_dir), fields(namespace = %namespace, secret = tracing::field::Empty))]
 async fn create_secret(
     platform_info_binary: &Path,
     id_file: Option<&Path>,
     namespace: &str,
+    efivars_dir: &Path,
 ) -> Result<()> {
     // Get platform info from external binary (fixed-size arrays, stack allocated)
     let (cpu_svn, pce_id, pce_svn, qe_id) = get_platform_info(platform_info_binary)?;
@@ -307,7 +314,7 @@ async fn create_secret(
     info!("Creating secret");
 
     // Read platform manifest from EFI variable; may be absent after first registration
-    let platform_manifest = get_platform_manifest(Path::new("/sys/firmware/efi/efivars"))?;
+    let platform_manifest = get_platform_manifest(efivars_dir)?;
     if platform_manifest.is_none() {
         info!(
             "Platform manifest EFI variable not available; omitting from patch (existing value preserved by SSA)"
@@ -906,6 +913,7 @@ async fn main() -> Result<()> {
                 &get_args.platform_info_binary,
                 get_args.id_file.as_deref(),
                 &get_args.namespace,
+                &get_args.efivars_dir,
             )
             .await?;
         }
