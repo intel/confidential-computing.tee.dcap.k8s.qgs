@@ -331,7 +331,8 @@ docker push $(BUNDLE_IMG)
 
 ```bash
 operator-sdk olm install
-operator-sdk run bundle $(BUNDLE_IMG)
+kubectl create namespace intel-dcap-operator-system
+operator-sdk run bundle $(BUNDLE_IMG) -n intel-dcap-operator-system --install-mode OwnNamespace
 ```
 
 ## Security
