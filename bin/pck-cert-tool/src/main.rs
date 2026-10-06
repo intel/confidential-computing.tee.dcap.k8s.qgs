@@ -231,21 +231,27 @@ fn write_id_file(path: &Path, id: &str) -> Result<()> {
     Ok(())
 }
 
-fn get_platform_manifest() -> Result<Option<String>> {
+fn get_platform_manifest(efivars_dir: &Path) -> Result<Option<String>> {
     debug!("Reading platform manifest from EFI variable");
 
-    // EFI variables are files under /sys/firmware/efi/efivars/{name}-{guid}.
+    // EFI variables are files named {name}-{guid} in the efivarfs directory.
     // file layout: EFI attrs(4) | Intel version(2) | Intel size(2) | structure data
-    let path = format!("/sys/firmware/efi/efivars/{SGX_PLATFORM_MANIFEST_EFI_VAR}");
+    let path = efivars_dir.join(SGX_PLATFORM_MANIFEST_EFI_VAR);
     let mut file = match std::fs::File::open(&path) {
         Ok(f) => f,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             warn!(
+                path = %path.display(),
                 "EFI variable not found (non-EFI system or variable not set), skipping platform manifest"
             );
             return Ok(None);
         }
-        Err(e) => return Err(anyhow!("Failed to open EFI variable {path}: {e}")),
+        Err(e) => {
+            return Err(anyhow!(
+                "Failed to open EFI variable {}: {e}",
+                path.display()
+            ));
+        }
     };
 
     let mut header = [0u8; 8];
@@ -301,7 +307,7 @@ async fn create_secret(
     info!("Creating secret");
 
     // Read platform manifest from EFI variable; may be absent after first registration
-    let platform_manifest = get_platform_manifest()?;
+    let platform_manifest = get_platform_manifest(Path::new("/sys/firmware/efi/efivars"))?;
     if platform_manifest.is_none() {
         info!(
             "Platform manifest EFI variable not available; omitting from patch (existing value preserved by SSA)"
@@ -1004,6 +1010,80 @@ mod tests {
             std::fs::write(&file, content).unwrap();
             assert!(
                 get_id_from_file(&file).is_err(),
+                "case {case:?} should have errored"
+            );
+        }
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn write_efi_var(dir: &Path, content: &[u8]) {
+        std::fs::write(dir.join(SGX_PLATFORM_MANIFEST_EFI_VAR), content).unwrap();
+    }
+
+    fn efi_var(declared_size: u16, data: &[u8]) -> Vec<u8> {
+        let mut v = vec![0x07, 0x00, 0x00, 0x00, 0x01, 0x00];
+        v.extend_from_slice(&declared_size.to_le_bytes());
+        v.extend_from_slice(data);
+        v
+    }
+
+    #[test]
+    fn test_platform_manifest_valid() {
+        let dir = unique_temp_dir("efi-valid");
+        write_efi_var(&dir, &efi_var(3, &[0x00, 0xab, 0xff]));
+
+        let manifest = get_platform_manifest(&dir).expect("read should succeed");
+        assert_eq!(manifest.as_deref(), Some("00abff"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_platform_manifest_max_size() {
+        let dir = unique_temp_dir("efi-max");
+        write_efi_var(&dir, &efi_var(u16::MAX, &[0x5a; u16::MAX as usize]));
+
+        let manifest = get_platform_manifest(&dir)
+            .expect("read should succeed")
+            .unwrap();
+        assert_eq!(manifest.len(), 2 * u16::MAX as usize);
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_platform_manifest_missing_is_none() {
+        let dir = unique_temp_dir("efi-missing");
+        let manifest = get_platform_manifest(&dir).expect("missing var is not an error");
+        assert!(manifest.is_none());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_platform_manifest_malformed_errors() {
+        let dir = unique_temp_dir("efi-malformed");
+        let cases = [
+            ("empty", Vec::new()),
+            (
+                "short_header",
+                vec![0x07, 0x00, 0x00, 0x00, 0x01, 0x00, 0x03],
+            ),
+            ("size_larger_than_data", efi_var(4, &[0x00, 0xab, 0xff])),
+            ("size_smaller_than_data", efi_var(2, &[0x00, 0xab, 0xff])),
+            ("size_zero_with_data", efi_var(0, &[0x00])),
+            (
+                "data_beyond_max_size",
+                efi_var(u16::MAX, &[0x5a; u16::MAX as usize + 1]),
+            ),
+        ];
+        for (case, content) in cases {
+            let case_dir = dir.join(case);
+            std::fs::create_dir(&case_dir).unwrap();
+            write_efi_var(&case_dir, &content);
+            assert!(
+                get_platform_manifest(&case_dir).is_err(),
                 "case {case:?} should have errored"
             );
         }
