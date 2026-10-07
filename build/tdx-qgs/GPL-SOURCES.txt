@@ -1,0 +1,7 @@
+This image includes the GNU C Library (glibc) and the GCC runtime libraries
+(libgcc, libstdc++, libgomp) from Debian. They are licensed under the LGPL and
+the GPL with the GCC Runtime Library Exception, respectively.
+
+The corresponding Debian source packages are in the image with the same tag
+and a -sources suffix (for example, intel/intel-tdx-qgs:<version>-sources),
+under /usr/local/share/pck-cert-tool/gpl-sources.

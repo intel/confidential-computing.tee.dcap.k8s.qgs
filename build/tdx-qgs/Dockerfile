@@ -125,10 +125,10 @@ RUN dpkg-query -W -f='${Package}\n' > /tmp/base-pkglist.txt \
     && cp /build/target/release/pck-cert-tool /rootfs/usr/local/bin/
 
 COPY LICENSE /rootfs/usr/local/share/pck-cert-tool/LICENSE
-COPY --from=gpl-sources /gpl-sources /rootfs/usr/local/share/pck-cert-tool/gpl-sources
+COPY build/tdx-qgs/GPL-SOURCES.txt /rootfs/usr/local/share/pck-cert-tool/GPL-SOURCES.txt
 
 # Final stage — distroless/cc-debian13 provides glibc, libgcc, libstdc++, libssl, ca-certificates
-FROM final-base
+FROM final-base AS qgs
 COPY --from=builder /rootfs/ /
 
 # QCNL local caching is the only supported mode: this image ships without curl/libcurl,
@@ -139,3 +139,11 @@ ENV QCNL_CONF_PATH=/opt/intel/tdx-qgs/qcnl.conf
 USER 65534:65534
 
 ENTRYPOINT ["/opt/intel/tdx-qgs/qgs", "--no-daemon"]
+
+# The qgs image with the source of the LGPL shared libs (gcc-14, glibc),
+# released with the -sources tag suffix.
+FROM qgs AS qgs-sources
+COPY --from=gpl-sources /gpl-sources /usr/local/share/pck-cert-tool/gpl-sources
+
+# Build the qgs image by default.
+FROM qgs

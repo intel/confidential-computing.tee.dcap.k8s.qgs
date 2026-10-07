@@ -8,6 +8,9 @@ Build from the repository root (required for Cargo workspace access):
 # pck-cert-tool + get-platform-info + QGS
 docker build -t intel-tdx-qgs:latest -f build/tdx-qgs/Dockerfile .
 
+# the same with the Debian source packages of glibc and gcc-14
+docker build --target qgs-sources -t intel-tdx-qgs:latest-sources -f build/tdx-qgs/Dockerfile .
+
 # operator
 docker build -t intel-tdx-dcap-operator:latest -f build/operator/Dockerfile .
 ```
