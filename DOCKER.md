@@ -72,13 +72,24 @@ docker run --rm \
 
 NB: Cluster admins are expected to configure Pod Security Admission and Resource Quotas for all namespaces such that unwanted QGS hostPath volume access and/or `sgx.intel.com/*` resource use are blocked.
 
-## Signed Container Images
+## Signed Container Images and Helm Chart
 
-The release images are signed with keyless signing using cosign. The signing proof is stored in [rekor.sigstore.dev](https://rekor.sigstore.dev) in an append-only transparency log.
-The signature is stored in Docker Hub along with the images.
+The release image and Helm chart are signed with keyless signing using cosign by the
+[release workflow](.github/workflows/release.yaml). The signing proof is stored in
+[rekor.sigstore.dev](https://rekor.sigstore.dev) in an append-only transparency log.
+The signatures are stored as [Sigstore bundles](https://docs.sigstore.dev/about/bundle/) attached
+to the image (Docker Hub) and the chart (GHCR) as OCI referrers, not as legacy `.sig` tags, so
+verification requires cosign v3 or newer.
+
+Verify the image, replacing `<version>` with the release version (e.g. `0.27.0` for tag `v0.27.0`):
 
 ```bash
-cosign verify --certificate-oidc-issuer https://token.actions.githubusercontent.com --certificate-identity-regexp https://github.com/intel/<repo>/.github/workflows/lib-publish.yaml.* intel/<image>:<version>  | jq .
+cosign verify \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  --certificate-identity https://github.com/intel/confidential-computing.tee.dcap.k8s.qgs/.github/workflows/release.yaml@refs/tags/v<version> \
+  docker.io/intel/intel-tdx-qgs:<version> | jq .
 ```
 
-To verify the signing in Kubernetes, one can use [policy managers](https://docs.sigstore.dev/policy-controller/overview/) with [keyless authorities](https://docs.sigstore.dev/policy-controller/overview/#configuring-keyless-authorities).
+Verify the Helm chart the same way, using the chart reference `ghcr.io/intel/intel-tdx-qgs:<chart-version>`.
+
+To enforce the signature in Kubernetes, use a [policy manager](https://docs.sigstore.dev/policy-controller/overview/) that supports Sigstore bundles in OCI referrers (e.g. policy-controller v0.14.0 or newer) with [keyless authorities](https://docs.sigstore.dev/policy-controller/overview/#configuring-keyless-authorities). Without admission-time enforcement, signatures are not checked when pods are created.
