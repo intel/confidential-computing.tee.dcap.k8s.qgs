@@ -27,13 +27,13 @@ spec:
       deployments: null
     strategy: ""
   installModes:
-  - supported: false
+  - supported: true
     type: OwnNamespace
   - supported: false
     type: SingleNamespace
   - supported: false
     type: MultiNamespace
-  - supported: true
+  - supported: false
     type: AllNamespaces
   keywords:
   - tdx
@@ -46,7 +46,7 @@ spec:
   - email: mikko.ylinen@intel.com
     name: Mikko Ylinen
   maturity: alpha
-  minKubeVersion: 1.21.0
+  minKubeVersion: 1.29.0
   provider:
     name: Intel® Corporation
     url: https://intel.com
