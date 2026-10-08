@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::Secret;
 use kube::{
-    Client,
+    Client, ResourceExt,
     api::{Api, Patch, PatchParams},
     runtime::{WatchStreamExt, watcher},
 };
@@ -605,12 +605,7 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
             result = watch_stream.next() => {
                 match result {
                     Some(Ok(secret)) => {
-                        let secret_name = secret
-                            .metadata
-                            .name
-                            .as_ref()
-                            .context("Secret has no name")?
-                            .clone();
+                        let secret_name = secret.name_any();
 
                         info!(platform_secret = %secret_name, "Detected platform-data secret");
 
@@ -618,12 +613,14 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
                         let secrets_clone = secrets.clone();
                         let http_client_clone = http_client.clone();
                         let api_key_clone = api_key.map(|s| s.to_string());
+                        let namespace_clone = namespace.to_string();
 
                         let handle = tokio::spawn(async move {
                             if let Err(e) = process_platform_secret(
                                 &secrets_clone,
                                 &http_client_clone,
                                 api_key_clone.as_deref(),
+                                &namespace_clone,
                                 secret,
                             )
                             .await
@@ -775,22 +772,11 @@ async fn process_platform_secret(
     secrets: &Api<Secret>,
     http_client: &reqwest::Client,
     api_key: Option<&str>,
+    namespace: &str,
     secret: Secret,
 ) -> Result<()> {
-    // Extract secret name and namespace from metadata
-    let secret_name = secret
-        .metadata
-        .name
-        .as_ref()
-        .context("Secret has no name")?;
-
-    let namespace = secret
-        .metadata
-        .namespace
-        .as_ref()
-        .context("Secret has no namespace")?;
-
-    tracing::Span::current().record("platform_secret", secret_name);
+    let secret_name = secret.name_any();
+    tracing::Span::current().record("platform_secret", &secret_name);
 
     let pck_secret_name = format!("{secret_name}-pck");
 
@@ -811,7 +797,7 @@ async fn process_platform_secret(
     let data = secret.data.as_ref().context("Secret has no data")?;
 
     // Validate the untrusted secret contents and build the request body from them
-    let request_body = prepare_registration(secret_name, data)?;
+    let request_body = prepare_registration(&secret_name, data)?;
 
     info!("Requesting PCK certificates from Intel PCS API");
 
@@ -880,7 +866,7 @@ async fn process_platform_secret(
 
     // Update the PIID index with this platform's QE ID → PIID mapping.
     // qe_id is derived from the platform-data secret name (which is the qe_id itself).
-    patch_piid_index(secrets, secret_name, &piid).await?;
+    patch_piid_index(secrets, &secret_name, &piid).await?;
 
     info!(
         pck_secret = %pck_secret_name,
