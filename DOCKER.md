@@ -39,17 +39,19 @@ docker run --rm intel-tdx-qgs:latest get_platform_info
 
 ### Run get-platforms command
 
-This requires access to EFI variables and SGX devices:
+This requires access to EFI variables and SGX devices. The runtime masks `/sys/firmware` in
+unprivileged containers, so mount the EFI variables elsewhere and point `-e` to them:
 
 ```bash
 docker run --rm \
-  --privileged \
-  -v /sys/firmware/efi:/sys/firmware/efi:ro \
-  -v /dev/sgx_enclave:/dev/sgx_enclave \
-  -v /dev/sgx_provision:/dev/sgx_provision \
+  --user 0 \
+  --device /dev/sgx_enclave \
+  --device /dev/sgx_provision \
+  -v /sys/firmware/efi/efivars:/run/efivars:ro \
   -v ~/.kube:/root/.kube:ro \
+  --entrypoint pck-cert-tool \
   intel-tdx-qgs:latest \
-  pck-cert-tool get-platforms -p /usr/local/bin/get_platform_info -n default
+  get-platforms -p /usr/local/bin/get_platform_info -e /run/efivars -n default
 ```
 
 ### Run get-certificates command
@@ -65,7 +67,7 @@ docker run --rm \
 
 ## Required Permissions
 
-- **For get-platforms**: Requires privileged access to read EFI variables and access SGX devices
+- **For get-platforms**: Requires read access to the EFI variables and access to the SGX devices
 - **For get-certificates**: Requires Kubernetes API access (via kubeconfig or service account)
 - **For register**: Requires Kubernetes API access and Intel PCS API key
 - **SGX devices**: `/dev/sgx_enclave` and `/dev/sgx_provision` must be accessible via `sgx.intel.com/*` device plugin resoures.

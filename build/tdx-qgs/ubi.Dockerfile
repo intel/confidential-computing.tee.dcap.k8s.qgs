@@ -116,8 +116,8 @@ COPY --from=builder /rootfs/ /
 # so the QCNL library can never reach out to a remote PCCS.
 ENV QCNL_CONF_PATH=/opt/intel/tdx-qgs/qcnl.conf
 
-# Run as nobody
-USER nobody
+# Run as nobody (uid 65534). Numeric, so that kubelet can verify runAsNonRoot.
+USER 65534:65534
 
 ENTRYPOINT ["/opt/intel/tdx-qgs/qgs", "--no-daemon"]
 

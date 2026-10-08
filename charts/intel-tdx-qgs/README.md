@@ -66,8 +66,8 @@ By default, NFD only creates labels in the `feature.node.kubernetes.io` and `*.f
 ### Prepare a dedicated namespace
 
 The current QGS pod specification cannot run under the `baseline` or `restricted` Pod Security Standards. 
-It uses a host path for the QGS socket in all modes; `Online` and `Offline` modes additionally use a privileged platform 
-registration init container and mount host EFI variables.
+It uses a host path for the QGS socket in all modes; `Online` and `Offline` modes additionally mount the host EFI variables
+read-only in the platform registration init container. On SELinux hosts, the init container and QGS run as `spc_t`.
 
 Create a dedicated namespace before installing the chart. 
 Do not deploy unrelated workloads in this namespace:

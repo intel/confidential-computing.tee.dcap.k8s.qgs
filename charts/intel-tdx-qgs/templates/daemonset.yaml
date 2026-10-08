@@ -48,6 +48,8 @@ spec:
             - /run/dcap/platform/id
             - -n
             - $(NAMESPACE)
+            - -e
+            - /run/efivars
           env:
             - name: NAMESPACE
               valueFrom:
@@ -58,9 +60,11 @@ spec:
                 fieldRef:
                   fieldPath: spec.nodeName
           securityContext:
-            privileged: true
             readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
             runAsUser: 0
+            seLinuxOptions:
+              type: spc_t
             capabilities:
               drop:
                 - ALL
@@ -75,7 +79,7 @@ spec:
               sgx.intel.com/provision: 1
           volumeMounts:
             - name: efivars
-              mountPath: /sys/firmware/efi/efivars
+              mountPath: /run/efivars
               readOnly: true
             - name: platform-info
               mountPath: /run/dcap/platform
