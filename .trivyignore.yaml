@@ -4,17 +4,11 @@
 vulnerabilities: []
 
 misconfigurations:
-  - id: KSV-0001
-    statement: "platform-registration requires privileged access to SGX efivars and enclave provisioning; allowPrivilegeEscalation is an accepted consequence"
-
   - id: KSV-0012
     statement: "SGX efivars and /dev/sgx_* access require root for platform-registration and tdx-qgs"
 
   - id: KSV-0013
     statement: "Image tags are template placeholders replaced by the operator with digest-pinned references at deploy time"
-
-  - id: KSV-0017
-    statement: "platform-registration requires privileged mode for SGX EFI variable access"
 
   - id: KSV-0020
     statement: "Root UIDs required for /dev/sgx_* access in platform-registration and tdx-qgs; pck-certs-watcher runs as nobody"
