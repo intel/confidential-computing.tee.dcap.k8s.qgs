@@ -38,6 +38,10 @@ const SGX_PLATFORM_MANIFEST_EFI_VAR: &str =
 /// guaranteed to be a real QE ID (e.g. a node name in External mode).
 const ZERO_ID: &str = "00000000000000000000000000000000";
 
+/// Server-side apply field manager for all Secrets written by this tool. Keep it stable:
+/// changing it leaves the field ownership in existing Secrets with the old manager.
+const FIELD_MANAGER: &str = "pck-cert-tool";
+
 /// Platform info fields returned by the external platform-info binary:
 /// (cpu_svn, enc_ppid, pce_id, pce_svn, qe_id) — enc_ppid is present in binary output but not used
 type PlatformInfo = ([u8; 32], [u8; 4], [u8; 4], [u8; 32]);
@@ -354,7 +358,7 @@ async fn create_secret(
     }
 
     // Create or update the secret using server-side apply
-    let params = PatchParams::apply("pck-cert-tool");
+    let params = PatchParams::apply(FIELD_MANAGER);
 
     secrets
         .patch(qe_id_str, &params, &Patch::Apply(&secret))
@@ -529,7 +533,7 @@ const PIID_INDEX_SECRET_NAME: &str = "piid-index";
 /// platforms into the same secret are always safe.
 #[instrument(skip(secrets))]
 async fn patch_piid_index(secrets: &Api<Secret>, qe_id: &str, piid: &str) -> Result<()> {
-    let field_manager = format!("pck-cert-tool/{qe_id}");
+    let field_manager = format!("{FIELD_MANAGER}/{qe_id}");
     let params = PatchParams::apply(&field_manager);
 
     let patch = serde_json::json!({
@@ -868,7 +872,7 @@ async fn process_platform_secret(
     });
 
     // Create or update the secret using server-side apply
-    let params = PatchParams::apply("pck-cert-tool");
+    let params = PatchParams::apply(FIELD_MANAGER);
 
     secrets
         .patch(&pck_secret_name, &params, &Patch::Apply(&pck_secret))
