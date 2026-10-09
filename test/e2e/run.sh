@@ -262,6 +262,32 @@ verify_certs_in_pods() {
 
 verify_certs_in_pods
 
+# ---------------------------------------------------------------------------
+# 8b. Verify platform-registration takes over fields changed by other managers
+# ---------------------------------------------------------------------------
+
+# A manual edit makes kubectl a co-owner of the field; without a forced
+# server-side apply, the next platform-registration run fails with a field
+# conflict and blocks the QGS pod from starting. Platform data values are sent
+# as stringData (not tracked by managedFields), so edit the label instead.
+_edited_secret=${PLATFORM_DATA_SECRETS%% *}
+log "Editing type label of platform-data secret $_edited_secret"
+kubectl label secret "$_edited_secret" -n "$QGS_NAMESPACE" type=tampered --overwrite
+
+log "Recreating QGS pods to rerun platform-registration"
+kubectl delete pods -n "$QGS_NAMESPACE" -l app=intel-tdx-qgs --wait=false
+_deadline=$(( $(date +%s) + TIMEOUT ))
+until [[ "$(kubectl get secret "$_edited_secret" -n "$QGS_NAMESPACE" \
+    -o jsonpath='{.metadata.labels.type}')" == "platform-data" ]]; do
+    [[ "$(date +%s)" -gt "$_deadline" ]] && \
+        fail "platform-registration did not restore type label of $_edited_secret within ${TIMEOUT}s"
+    sleep 3
+done
+kubectl rollout status daemonset/intel-tdx-dcap-qgs \
+    -n "$QGS_NAMESPACE" --timeout="${TIMEOUT}s" \
+    || fail "QGS pods did not become available after platform-registration rerun"
+log "PASS: platform-registration restored manually edited platform data"
+
 log "Offline mode checks passed"
 
 # ---------------------------------------------------------------------------

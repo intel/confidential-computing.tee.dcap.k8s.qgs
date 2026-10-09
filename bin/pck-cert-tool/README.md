@@ -48,7 +48,15 @@ Watch platform-data secrets and automatically register them with Intel PCS to ob
   - PCK certificates JSON array
 - Creates new secrets with `-pck` suffix containing base64-encoded cache files
 - Labels PCK secrets with `fmspc=<value>` extracted from the SGX-FMSPC response header
-- Handles multiple concurrent registrations for parallel secret creation
+- Reconciles platform-data secrets with a Kubernetes controller: at most 4 registrations run
+  concurrently and updates to the same secret are deduplicated
+- Validates platform-data secret contents before sending anything to Intel PCS; invalid secrets
+  are not retried until they change
+- Doesn't resend platform data that Intel PCS rejected (HTTP 4xx, e.g. an invalid or
+  unregistered platform manifest, or an invalid API key) until the platform-data secret is
+  updated or the registrar restarts; other failures are retried every 5 minutes
+- Honors Intel PCS rate limiting (HTTP 429): pauses all PCS requests for the `Retry-After`
+  duration (default 1 minute, capped at 1 hour) instead of retrying
 - Uses `update=early` query parameter for TCB Info requests
 
 ### get-certificates
@@ -213,9 +221,17 @@ metadata:
   name: <id>-pck
   labels:
     fmspc: "<FMSPC value from SGX-FMSPC header>"
+  annotations:
+    trustedservices.intel.com/platform-data-fingerprint: "sha256:<hex>"
+    trustedservices.intel.com/expires-at: "<Unix timestamp>"
 data:
   certificate: <base64-encoded cache file>
 ```
+
+The registrar skips the Intel PCS call for a platform-data secret when its `-pck` secret is not
+expired and its `platform-data-fingerprint` matches a SHA-256 fingerprint of the fields sent to
+PCS (`platform_manifest`, `pce_id`, `cpu_svn`). Updates to a platform-data secret that don't
+change those fields (e.g. label or annotation edits) therefore don't trigger new PCS calls.
 
 The `certificate` field contains a binary cache file in the format used by Intel SGX DCAP Quote Provider Library (QPL). The cache file structure is:
 

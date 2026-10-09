@@ -7,23 +7,30 @@ use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::Secret;
 use kube::{
-    Client,
+    Client, ResourceExt,
     api::{Api, Patch, PatchParams},
-    runtime::{WatchStreamExt, watcher},
+    runtime::{
+        WatchStreamExt,
+        controller::{self, Action, Controller},
+        watcher,
+    },
 };
 use pck_cert_tool::cache::{build_cache_blob, parse_cache_blob};
 use pck_cert_tool::pcs_client::{
-    fetch_pck_certs, fetch_tcb_info, filter_and_verify_pck_certs, validate_tcb_info,
-    verify_tcb_info,
+    PckCertsRequest, PcsApiError, PcsPause, PcsRateLimited, fetch_pck_certs, fetch_tcb_info,
+    filter_and_verify_pck_certs, validate_tcb_info, verify_tcb_info,
 };
-use pck_cert_tool::platform_data::{QE_ID_HEX_LEN, is_fixed_len_hex, prepare_registration};
+use pck_cert_tool::platform_data::{
+    QE_ID_HEX_LEN, is_fixed_len_hex, prepare_registration, registration_fingerprint,
+};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::Command;
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::time::sleep;
 use tracing::{debug, error, info, instrument, warn};
 
@@ -37,6 +44,10 @@ const SGX_PLATFORM_MANIFEST_EFI_VAR: &str =
 /// Reserved all-zero QE ID, used as the QPL cache file name when the actual ID isn't
 /// guaranteed to be a real QE ID (e.g. a node name in External mode).
 const ZERO_ID: &str = "00000000000000000000000000000000";
+
+/// Server-side apply field manager for all Secrets written by this tool. Keep it stable:
+/// changing it leaves the field ownership in existing Secrets with the old manager.
+const FIELD_MANAGER: &str = "pck-cert-tool";
 
 /// Platform info fields returned by the external platform-info binary:
 /// (cpu_svn, enc_ppid, pce_id, pce_svn, qe_id) — enc_ppid is present in binary output but not used
@@ -353,8 +364,10 @@ async fn create_secret(
         secret["stringData"]["platform_manifest"] = serde_json::json!(manifest);
     }
 
-    // Create or update the secret using server-side apply
-    let params = PatchParams::apply("pck-cert-tool");
+    // Create or update the secret using server-side apply. This node's platform data is
+    // authoritative, so take over fields that other managers (e.g. `kubectl edit`) changed
+    // instead of failing with a conflict.
+    let params = PatchParams::apply(FIELD_MANAGER).force();
 
     secrets
         .patch(qe_id_str, &params, &Patch::Apply(&secret))
@@ -526,11 +539,12 @@ const PIID_INDEX_SECRET_NAME: &str = "piid-index";
 /// Patch a single `qe_id → piid` entry into the shared PIID index secret.
 ///
 /// Uses a per-`qe_id` SSA field manager so concurrent tasks patching different
-/// platforms into the same secret are always safe.
+/// platforms into the same secret are always safe. The apply is forced so that an
+/// entry changed by another manager is taken back; it only covers this platform's key.
 #[instrument(skip(secrets))]
 async fn patch_piid_index(secrets: &Api<Secret>, qe_id: &str, piid: &str) -> Result<()> {
-    let field_manager = format!("pck-cert-tool/{qe_id}");
-    let params = PatchParams::apply(&field_manager);
+    let field_manager = format!("{FIELD_MANAGER}/{qe_id}");
+    let params = PatchParams::apply(&field_manager).force();
 
     let patch = serde_json::json!({
         "apiVersion": "v1",
@@ -552,20 +566,69 @@ async fn patch_piid_index(secrets: &Api<Secret>, qe_id: &str, piid: &str) -> Res
     Ok(())
 }
 
+/// Maximum number of platform registrations processed concurrently.
+const MAX_CONCURRENT_REGISTRATIONS: u16 = 4;
+
+/// Delay before retrying a registration that failed for reasons other than PCS rejecting it.
+const REGISTRATION_RETRY_DELAY: Duration = Duration::from_secs(300);
+
+/// Shared state of the registrar's platform-data secret reconciler.
+struct RegistrarContext {
+    secrets: Api<Secret>,
+    /// Namespace the platform-data secrets are watched in and the -pck secrets are written to.
+    namespace: String,
+    http_client: reqwest::Client,
+    api_key: Option<String>,
+    pcs_pause: tokio::sync::Mutex<PcsPause>,
+}
+
+/// Reconcile error, with when to retry the platform-data secret.
+#[derive(Debug)]
+struct ReconcileError {
+    source: anyhow::Error,
+    /// `None` waits for the platform-data secret to change instead.
+    retry_after: Option<Duration>,
+}
+
+impl ReconcileError {
+    fn permanent(source: anyhow::Error) -> Self {
+        Self {
+            source,
+            retry_after: None,
+        }
+    }
+
+    fn retry(source: anyhow::Error, retry_after: Duration) -> Self {
+        Self {
+            source,
+            retry_after: Some(retry_after),
+        }
+    }
+}
+
+impl std::fmt::Display for ReconcileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:#}", self.source)
+    }
+}
+
+impl std::error::Error for ReconcileError {}
+
 #[instrument(name = "register", skip(api_key), fields(namespace = %namespace))]
 async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()> {
     // Create Kubernetes client
     let client = Client::try_default().await?;
-    let secrets: Api<Secret> = Api::namespaced(client.clone(), namespace);
+    let secrets: Api<Secret> = Api::namespaced(client, namespace);
 
-    // Create HTTP client for Intel PCS API with retry on 5xx / 429
+    // Create HTTP client for Intel PCS API with retry on connection errors and 5xx.
+    // 429 is not retried here: it pauses all PCS requests for the Retry-After delay instead.
     let retry_policy = reqwest::retry::for_host("api.trustedservices.intel.com")
         .max_retries_per_request(3)
         .classify_fn(|req_rep| {
             let retryable = req_rep.error().is_some()
                 || req_rep
                     .status()
-                    .map(|s| s.is_server_error() || s == reqwest::StatusCode::TOO_MANY_REQUESTS)
+                    .map(|s| s.is_server_error())
                     .unwrap_or(false);
             if retryable {
                 req_rep.retryable()
@@ -578,100 +641,62 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
         .build()
         .context("Failed to build HTTP client")?;
 
-    // Set up watch with label selector for platform-data secrets
-    let watch_config = watcher::Config::default().labels("type=platform-data");
-    let mut watch_stream = watcher(secrets.clone(), watch_config)
-        .applied_objects()
-        .boxed();
+    let ctx = Arc::new(RegistrarContext {
+        secrets: secrets.clone(),
+        namespace: namespace.to_string(),
+        http_client,
+        api_key: api_key.map(str::to_string),
+        pcs_pause: tokio::sync::Mutex::new(PcsPause::default()),
+    });
 
     info!("Watching for platform-data secrets");
 
-    // Track spawned tasks for graceful shutdown
-    let mut tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
-
-    // Set up signal handler for graceful shutdown
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-
-    // Watch for changes until SIGTERM
-    loop {
-        // Prune finished tasks to prevent unbounded growth of the task list
-        tasks.retain(|handle: &tokio::task::JoinHandle<()>| !handle.is_finished());
-
-        tokio::select! {
-            result = watch_stream.next() => {
-                match result {
-                    Some(Ok(secret)) => {
-                        let secret_name = secret
-                            .metadata
-                            .name
-                            .as_ref()
-                            .context("Secret has no name")?
-                            .clone();
-
-                        info!(platform_secret = %secret_name, "Detected platform-data secret");
-
-                        // Spawn a task to handle this secret asynchronously
-                        let secrets_clone = secrets.clone();
-                        let http_client_clone = http_client.clone();
-                        let api_key_clone = api_key.map(|s| s.to_string());
-
-                        let handle = tokio::spawn(async move {
-                            if let Err(e) = process_platform_secret(
-                                &secrets_clone,
-                                &http_client_clone,
-                                api_key_clone.as_deref(),
-                                secret,
-                            )
-                            .await
-                            {
-                                error!(platform_secret = %secret_name, error = ?e, "Error processing platform-data secret");
-                            }
-                        });
-
-                        tasks.push(handle);
-                    }
-                    Some(Err(e)) => {
-                        warn!(error = %e, "Watch error");
-                        sleep(K8S_API_WATCH_ERROR_BACKOFF).await;
-                    }
-                    None => {
-                        info!("Watch stream ended");
-                        break;
-                    }
-                }
-            }
-            _ = sigterm.recv() => {
-                info!("Received SIGTERM, shutting down gracefully");
-                break;
-            }
+    // The controller never reconciles the same secret concurrently, coalesces repeated events
+    // for a secret, and on SIGTERM waits for in-flight registrations to finish.
+    Controller::new(
+        secrets,
+        watcher::Config::default().labels("type=platform-data"),
+    )
+    .with_config(controller::Config::default().concurrency(MAX_CONCURRENT_REGISTRATIONS))
+    .shutdown_on_signal()
+    .run(process_platform_secret, registration_error_policy, ctx)
+    .for_each(|result| async move {
+        match result {
+            Ok(_) => {}
+            // Already logged by the error policy
+            Err(controller::Error::ReconcilerFailed(..)) => {}
+            Err(e) => warn!(error = %e, "Registrar controller error"),
         }
-    }
+    })
+    .await;
 
-    // Wait for all in-flight tasks to complete
-    if !tasks.is_empty() {
-        info!(
-            count = tasks.len(),
-            "Waiting for in-flight tasks to complete"
-        );
-        for handle in tasks {
-            if let Err(err) = handle.await {
-                error!(error = %err, "Platform secret task failed to join");
-            }
-        }
-        info!("All tasks completed");
-    }
-
+    info!("Registrar stopped");
     Ok(())
 }
 
-const ANNOTATION_PLATFORM_DATA_RV: &str =
-    "trustedservices.intel.com/platform-data-resource-version";
+fn registration_error_policy(
+    secret: Arc<Secret>,
+    err: &ReconcileError,
+    _ctx: Arc<RegistrarContext>,
+) -> Action {
+    error!(
+        platform_secret = %secret.name_any(),
+        error = ?err.source,
+        retry_in_secs = err.retry_after.map(|d| d.as_secs()),
+        "Error processing platform-data secret"
+    );
+    err.retry_after
+        .map_or_else(Action::await_change, Action::requeue)
+}
+
+const ANNOTATION_PLATFORM_DATA_FINGERPRINT: &str =
+    "trustedservices.intel.com/platform-data-fingerprint";
 const ANNOTATION_EXPIRES_AT: &str = "trustedservices.intel.com/expires-at";
 
 async fn pck_secret_is_valid(
     secrets: &Api<Secret>,
     pck_secret_name: &str,
-    platform_data_resource_version: &str,
+    platform_data_fingerprint: &str,
 ) -> Result<bool> {
     let secret = match secrets.get(pck_secret_name).await {
         Ok(secret) => secret,
@@ -687,23 +712,23 @@ async fn pck_secret_is_valid(
         return Ok(false);
     };
 
-    let Some(recorded_rv) = annotations
-        .get(ANNOTATION_PLATFORM_DATA_RV)
+    let Some(recorded_fingerprint) = annotations
+        .get(ANNOTATION_PLATFORM_DATA_FINGERPRINT)
         .map(|s| s.as_str())
     else {
         warn!(
             pck_secret = %pck_secret_name,
-            annotation = ANNOTATION_PLATFORM_DATA_RV,
-            "PCK secret is missing platform-data resource version annotation, refreshing"
+            annotation = ANNOTATION_PLATFORM_DATA_FINGERPRINT,
+            "PCK secret is missing platform-data fingerprint annotation, refreshing"
         );
         return Ok(false);
     };
-    if recorded_rv != platform_data_resource_version {
+    if recorded_fingerprint != platform_data_fingerprint {
         debug!(
             pck_secret = %pck_secret_name,
-            recorded_rv = %recorded_rv,
-            platform_data_resource_version = %platform_data_resource_version,
-            "PCK secret was created from a different platform-data version, refreshing"
+            recorded_fingerprint = %recorded_fingerprint,
+            platform_data_fingerprint = %platform_data_fingerprint,
+            "PCK secret was created from different platform data, refreshing"
         );
         return Ok(false);
     }
@@ -766,53 +791,96 @@ async fn pck_secret_is_valid(
     Ok(true)
 }
 
-#[instrument(skip(secrets, http_client, api_key, secret), fields(platform_secret = tracing::field::Empty))]
+#[instrument(skip(secret, ctx), fields(platform_secret = tracing::field::Empty))]
 async fn process_platform_secret(
-    secrets: &Api<Secret>,
-    http_client: &reqwest::Client,
-    api_key: Option<&str>,
-    secret: Secret,
-) -> Result<()> {
-    // Extract secret name and namespace from metadata
-    let secret_name = secret
-        .metadata
-        .name
-        .as_ref()
-        .context("Secret has no name")?;
-
-    let namespace = secret
-        .metadata
-        .namespace
-        .as_ref()
-        .context("Secret has no namespace")?;
-
-    tracing::Span::current().record("platform_secret", secret_name);
+    secret: Arc<Secret>,
+    ctx: Arc<RegistrarContext>,
+) -> Result<Action, ReconcileError> {
+    let secret_name = secret.name_any();
+    tracing::Span::current().record("platform_secret", &secret_name);
 
     let pck_secret_name = format!("{secret_name}-pck");
-
-    let platform_data_resource_version = secret
-        .metadata
-        .resource_version
-        .as_deref()
-        .context("Secret has no resource_version")?;
-
-    if pck_secret_is_valid(secrets, &pck_secret_name, platform_data_resource_version).await? {
-        info!(pck_secret = %pck_secret_name, "PCK secret is valid and platform data unchanged, skipping PCS call");
-        return Ok(());
-    }
 
     // Extract platform_manifest and pce_id from the secret
     // The k8s-openapi library automatically base64-decodes .data fields
     // ByteString.0 contains the raw bytes which we interpret as UTF-8 hex strings
-    let data = secret.data.as_ref().context("Secret has no data")?;
+    let data = secret
+        .data
+        .as_ref()
+        .context("Secret has no data")
+        .map_err(ReconcileError::permanent)?;
 
     // Validate the untrusted secret contents and build the request body from them
-    let request_body = prepare_registration(secret_name, data)?;
+    let request_body =
+        prepare_registration(&secret_name, data).map_err(ReconcileError::permanent)?;
+    let platform_data_fingerprint = registration_fingerprint(&request_body);
+
+    if pck_secret_is_valid(&ctx.secrets, &pck_secret_name, &platform_data_fingerprint)
+        .await
+        .map_err(|e| ReconcileError::retry(e, K8S_API_WATCH_ERROR_BACKOFF))?
+    {
+        info!(pck_secret = %pck_secret_name, "PCK secret is valid and platform data unchanged, skipping PCS call");
+        return Ok(Action::await_change());
+    }
+
+    if let Some(remaining) = ctx.pcs_pause.lock().await.remaining(Instant::now()) {
+        debug!(
+            retry_in_secs = remaining.as_secs(),
+            "Intel PCS requests are paused after rate limiting, deferring registration"
+        );
+        return Ok(Action::requeue(remaining));
+    }
+
+    match register_platform(
+        &ctx.secrets,
+        &ctx.http_client,
+        ctx.api_key.as_deref(),
+        &secret_name,
+        &ctx.namespace,
+        &request_body,
+        &platform_data_fingerprint,
+    )
+    .await
+    {
+        Ok(()) => Ok(Action::await_change()),
+        Err(e) => {
+            // Rate limiting isn't this platform's failure: pause all PCS requests instead
+            if let Some(rate_limited) = e.downcast_ref::<PcsRateLimited>() {
+                let retry_after = rate_limited.retry_after;
+                ctx.pcs_pause
+                    .lock()
+                    .await
+                    .pause(Instant::now(), retry_after);
+                return Err(ReconcileError::retry(e, retry_after));
+            }
+            // PCS rejected the request (e.g. invalid or unregistered platform data): resending
+            // it unchanged won't help, so wait for the platform data to change
+            if e.downcast_ref::<PcsApiError>()
+                .is_some_and(PcsApiError::is_client_error)
+            {
+                return Err(ReconcileError::permanent(e));
+            }
+            Err(ReconcileError::retry(e, REGISTRATION_RETRY_DELAY))
+        }
+    }
+}
+
+/// Registers one platform with Intel PCS and writes its PCK secret and PIID index entry.
+async fn register_platform(
+    secrets: &Api<Secret>,
+    http_client: &reqwest::Client,
+    api_key: Option<&str>,
+    secret_name: &str,
+    namespace: &str,
+    request_body: &PckCertsRequest,
+    platform_data_fingerprint: &str,
+) -> Result<()> {
+    let pck_secret_name = format!("{secret_name}-pck");
 
     info!("Requesting PCK certificates from Intel PCS API");
 
     // Fetch PCK certificates from Intel PCS API
-    let pck_response = fetch_pck_certs(http_client, api_key, &request_body).await?;
+    let pck_response = fetch_pck_certs(http_client, api_key, request_body).await?;
     let fmspc = pck_response.fmspc;
     let cert_chain = pck_response.cert_chain;
     let pck_certs_json = pck_response.pck_certs_json;
@@ -857,7 +925,7 @@ async fn process_platform_secret(
             "namespace": namespace,
             "labels": labels,
             "annotations": {
-                ANNOTATION_PLATFORM_DATA_RV: platform_data_resource_version,
+                ANNOTATION_PLATFORM_DATA_FINGERPRINT: platform_data_fingerprint,
                 ANNOTATION_EXPIRES_AT: expiration_time.to_string(),
             },
         },
@@ -867,8 +935,10 @@ async fn process_platform_secret(
         },
     });
 
-    // Create or update the secret using server-side apply
-    let params = PatchParams::apply("pck-cert-tool");
+    // Create or update the secret using server-side apply. The certificates just fetched from
+    // Intel PCS are authoritative, so take over fields that other managers changed instead of
+    // failing with a conflict.
+    let params = PatchParams::apply(FIELD_MANAGER).force();
 
     secrets
         .patch(&pck_secret_name, &params, &Patch::Apply(&pck_secret))
