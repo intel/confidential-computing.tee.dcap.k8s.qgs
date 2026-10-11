@@ -5,7 +5,7 @@ vulnerabilities: []
 
 misconfigurations:
   - id: KSV-0012
-    statement: "SGX efivars and /dev/sgx_* access require root for platform-registration and tdx-qgs"
+    statement: "/dev/sgx_* access requires root for platform-registration and tdx-qgs"
 
   - id: KSV-0013
     statement: "Image tags are template placeholders replaced by the operator with digest-pinned references at deploy time"
@@ -19,6 +19,9 @@ misconfigurations:
   - id: KSV-0023
     statement: "efivars hostPath required for SGX registration; qgs-socket hostPath required for TDX quote socket"
 
+  - id: KSV-0025
+    statement: "spc_t lets platform-registration and tdx-qgs access the efivars and qgs-socket hostPaths on SELinux-enforcing nodes without running privileged"
+
   - id: KSV-0105
     statement: "runAsUser 0 required for platform-registration and tdx-qgs /dev/sgx_* access"
 
@@ -29,7 +32,7 @@ misconfigurations:
     statement: "Operator must create and patch daemonsets (TDX QGS) and deployments (registrar) in its namespace; this is the operator's core reconciliation function"
 
   - id: KSV-0113
-    statement: "Kubernetes RBAC escalation prevention requires the operator to hold secrets permissions itself before it can create Roles that grant secrets access to operand service accounts (pck-cert-tool registrar)"
+    statement: "The static qgs Role lets pck-cert-tool create, patch and watch the platform-data and PCK certificate Secrets, whose names are only known at runtime"
 
   - id: DS-0026
     statement: "HEALTHCHECK not used; container health is managed by Kubernetes liveness/readiness probes at the pod level"
