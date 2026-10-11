@@ -4,8 +4,10 @@ metadata:
   name: manager-role
   namespace: system
 rules:
-# Permissions for managing DaemonSets
-# delete verb needed: operator explicitly deletes when switching modes
+# Permissions for managing the QGS DaemonSet
+# list and watch verbs needed: the controller reconciles on changes to it
+# create verb needed: server-side apply creates the object on first reconcile
+# No delete verb: the DaemonSet is garbage collected through its owner reference
 - apiGroups:
   - apps
   resources:
@@ -15,12 +17,12 @@ rules:
   - list
   - watch
   - create
-  - update
   - patch
-  - delete
 
-# Permissions for managing Deployments (registrar)
-# delete verb needed: operator explicitly deletes when switching to Offline mode
+# Permissions for managing the registrar Deployment
+# list and watch verbs needed: the controller reconciles on changes to it
+# create verb needed: server-side apply creates the object on first reconcile
+# delete verb needed: operator explicitly deletes when switching to Offline or External mode
 - apiGroups:
   - apps
   resources:
@@ -30,19 +32,5 @@ rules:
   - list
   - watch
   - create
-  - update
   - patch
   - delete
-
-# Permissions for managing Secrets (PCK certificate data per node)
-# No delete verb: resources have ownerReferences and are garbage collected
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  verbs:
-  - get
-  - list
-  - watch
-  - create
-  - patch

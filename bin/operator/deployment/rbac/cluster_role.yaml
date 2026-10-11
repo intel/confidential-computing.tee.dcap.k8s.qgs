@@ -6,6 +6,7 @@ rules:
 # TdxQuoteGenerationService is cluster-scoped (scope: Cluster in the CRD),
 # so access must be granted via a ClusterRole — a namespaced Role cannot
 # reference cluster-scoped resources.
+# patch verb needed: the operator adds and removes its finalizer
 - apiGroups:
   - trustedservices.intel.com
   resources:
@@ -14,18 +15,16 @@ rules:
   - get
   - list
   - watch
-  - create
-  - update
   - patch
-  - delete
 - apiGroups:
   - trustedservices.intel.com
   resources:
   - tdxquotegenerationservices/status
   verbs:
-  - get
-  - update
   - patch
+# update verb needed: owner references to the CR set blockOwnerDeletion, which
+# the OwnerReferencesPermissionEnforcement admission plugin (enabled e.g. on
+# OpenShift) only allows with update on the finalizers subresource
 - apiGroups:
   - trustedservices.intel.com
   resources:
