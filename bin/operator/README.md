@@ -215,12 +215,14 @@ The system has two levels of RBAC:
 The operator uses two separate RBAC resources:
 
 **ClusterRole** (`deployment/rbac/cluster_role.yaml`) — cluster-scoped CRD access only:
-- **TdxQuoteGenerationService**: get, list, watch, create, update, patch, delete + status + finalizers
+- **TdxQuoteGenerationService**: get, list, watch, patch (finalizer); patch on status; update on
+  finalizers (for owner references with `blockOwnerDeletion`)
 
 **Role** (`deployment/rbac/role.yaml`) — namespace-scoped resources in `intel-dcap-operator-system`:
-- **DaemonSets**: full CRUD + delete (explicit delete when switching modes)
-- **Deployments**: full CRUD + delete (explicit delete when switching to Offline)
-- **Secrets**: get, list, watch, create, patch
+- **DaemonSets**: get, list, watch, create, patch (server-side apply; garbage collected through
+  the owner reference)
+- **Deployments**: get, list, watch, create, patch, delete (explicit delete when switching to
+  Offline or External)
 
 **Note:** The operator runs as the dedicated `intel-tdx-dcap-controller-manager` ServiceAccount in `intel-dcap-operator-system`, so other pods in the namespace that use the `default` ServiceAccount do not get the operator permissions. It does not create or manage ServiceAccounts, Roles, or RoleBindings at runtime — the `qgs` ServiceAccount/Role/RoleBinding used by QGS/registrar pods (see below) are static manifests applied once via `kubectl apply -k deployment/default`, not reconciled by the controller.
 
