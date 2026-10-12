@@ -4,18 +4,18 @@
 //! operator - A Kubernetes operator built with kube-rs
 
 use kube::Client;
-use tracing::{Level, info};
-use tracing_subscriber::FmtSubscriber;
+use tracing::info;
 
 mod error;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize tracing
-    let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber)?;
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     info!("Starting operator");
 
