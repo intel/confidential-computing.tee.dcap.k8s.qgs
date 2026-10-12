@@ -13,6 +13,6 @@ fn main() {
     let crd = TdxQuoteGenerationService::crd();
     print!(
         "{}",
-        serde_yaml::to_string(&crd).expect("failed to serialize CRD")
+        serde_saphyr::to_string(&crd).expect("failed to serialize CRD")
     );
 }

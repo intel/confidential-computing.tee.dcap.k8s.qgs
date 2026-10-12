@@ -1,0 +1,152 @@
+name: Weekly security scan
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  images:
+    name: Scan ${{ matrix.name }} image
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: operator
+            dockerfile: build/operator/Dockerfile
+            image: intel-tdx-dcap-operator:weekly
+          - name: operator-ubi
+            dockerfile: build/operator/ubi.Dockerfile
+            image: intel-tdx-dcap-operator-ubi:weekly
+          - name: tdx-qgs
+            dockerfile: build/tdx-qgs/Dockerfile
+            image: intel-tdx-qgs:weekly
+    env:
+      IMAGE: ${{ matrix.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@594f3bf4285d9ea8dc53c9a0c9c4092420091003 # v4.4.0
+
+      - name: Build image
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          SCOPE: ${{ matrix.name }}
+        run: |
+          docker buildx build \
+            --cache-from "type=gha,scope=${SCOPE}" \
+            --load -t "${IMAGE}" -f "${DOCKERFILE}" .
+
+      - name: Run Trivy SARIF scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}
+          exit-code: 0
+          trivyignores: .trivyignore.yaml
+          format: sarif
+          output: trivy-image.sarif
+
+      - name: Upload SARIF results
+        if: always()
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy-image.sarif
+          category: trivy-image-${{ matrix.name }}
+
+      - name: Run Trivy JSON scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}
+          exit-code: 0
+          trivyignores: .trivyignore.yaml
+          format: json
+          output: trivy-image-${{ matrix.name }}.json
+
+      - name: Upload JSON report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-image-${{ matrix.name }}
+          path: trivy-image-${{ matrix.name }}.json
+          retention-days: 90
+
+      - name: Enforce Trivy policy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
+        with:
+          scan-type: image
+          image-ref: ${{ env.IMAGE }}
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+
+  rust-dependencies:
+    name: Scan Rust dependencies
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Run Trivy SARIF scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          skip-dirs: test/fake-platform-info
+          exit-code: 0
+          trivyignores: .trivyignore.yaml
+          format: sarif
+          output: trivy-cargo.sarif
+
+      - name: Upload SARIF results
+        if: always()
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy-cargo.sarif
+          category: trivy-cargo
+
+      - name: Run Trivy JSON scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          skip-dirs: test/fake-platform-info
+          exit-code: 0
+          trivyignores: .trivyignore.yaml
+          format: json
+          output: trivy-cargo.json
+
+      - name: Upload JSON report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: trivy-cargo
+          path: trivy-cargo.json
+          retention-days: 90
+
+      - name: Enforce Trivy policy
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln
+          skip-dirs: test/fake-platform-info
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          trivyignores: .trivyignore.yaml
+

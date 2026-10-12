@@ -398,7 +398,7 @@ async fn create_or_update_daemonset(
     let daemonset_name = format!("{}-qgs", resource.name_any());
 
     // Load and parse the DaemonSet template
-    let mut ds: DaemonSet = serde_yaml::from_str(DAEMONSET_TEMPLATE)
+    let mut ds: DaemonSet = serde_saphyr::from_str(DAEMONSET_TEMPLATE)
         .map_err(|e| Error::Generic(format!("Failed to parse DaemonSet template: {e}")))?;
 
     // Set metadata
@@ -489,7 +489,7 @@ async fn create_or_update_deployment(
     let deployment_name = format!("{}-registrar", resource.name_any());
 
     // Load and parse the Deployment template
-    let mut deploy: Deployment = serde_yaml::from_str(DEPLOYMENT_TEMPLATE)
+    let mut deploy: Deployment = serde_saphyr::from_str(DEPLOYMENT_TEMPLATE)
         .map_err(|e| Error::Generic(format!("Failed to parse Deployment template: {e}")))?;
 
     // Set metadata
@@ -782,6 +782,18 @@ pub async fn run(client: Client) -> Result<()> {
 mod tests {
     use super::*;
     use kube::api::ObjectMeta;
+
+    #[test]
+    fn templates_parse() {
+        let ds: DaemonSet = serde_saphyr::from_str(DAEMONSET_TEMPLATE).unwrap();
+        let ds_spec = ds.spec.unwrap().template.spec.unwrap();
+        assert_eq!(ds_spec.containers[0].name, "tdx-qgs");
+        assert!(ds_spec.init_containers.is_some_and(|c| !c.is_empty()));
+
+        let deploy: Deployment = serde_saphyr::from_str(DEPLOYMENT_TEMPLATE).unwrap();
+        let deploy_spec = deploy.spec.unwrap().template.spec.unwrap();
+        assert!(!deploy_spec.containers.is_empty());
+    }
 
     fn daemonset_owned_by(owner: OwnerReference) -> DaemonSet {
         DaemonSet {
