@@ -3,8 +3,8 @@ name: intel-tdx-qgs
 description: Helm chart for deploying Intel TDX DCAP Quote Generation Service
 home: https://github.com/intel/confidential-computing.tee.dcap.k8s.qgs
 type: application
-version: 0.1.0
-appVersion: "1.0.0"
+version: 0.27.0-alpha.1
+appVersion: "0.27.0-alpha.1"
 keywords:
   - intel
   - tdx
