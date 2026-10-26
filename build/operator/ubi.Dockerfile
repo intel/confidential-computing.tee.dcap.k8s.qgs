@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-FROM registry.access.redhat.com/ubi10/ubi:latest@sha256:27e14f4987d7abe56664d7e1b1dddcd0226d4ca593da5726f0f65697a17d0fee AS builder
+FROM registry.access.redhat.com/ubi10/ubi:latest@sha256:7495bfa53ae7a81a58aeface0bb4858d12741832c542c29dc690d67b183b73b0 AS builder
 
 # gcc is needed by the ring crate (C assembly)
 RUN dnf install -y \
@@ -34,7 +34,7 @@ RUN mkdir -p /rootfs/licenses \
          --manifest-path bin/operator/Cargo.toml
 
 # Final stage — ubi-micro; operator uses rustls/ring so only needs glibc
-FROM registry.access.redhat.com/ubi10/ubi-micro:latest@sha256:5b13e670e107509be71c066180032017ff5dddff2b6cd60d16311a5cea309953
+FROM registry.access.redhat.com/ubi10/ubi-micro:latest@sha256:1c105e547de5d9e0bc20d06ebabee73b20bc6bba994c50ae3e207684fd8bef2b
 
 COPY --from=builder /build/target/release/operator /operator
 COPY --from=builder /rootfs/licenses/THIRD-PARTY-LICENSES.html /licenses/THIRD-PARTY-LICENSES.html
