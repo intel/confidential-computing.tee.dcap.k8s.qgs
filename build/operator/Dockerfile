@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Intel Corporation
 # SPDX-License-Identifier: Apache-2.0
 
-FROM rust:1.99.0-slim-trixie@sha256:a32456165ecc2347c799bba7b54f5aabc158831934b2b98932b81080b312de62 AS builder
+FROM rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581 AS builder
 
 # Install musl target for static linking
 RUN rustup target add x86_64-unknown-linux-musl
@@ -39,7 +39,7 @@ RUN mkdir -p /rootfs/usr/local/share/operator \
          --manifest-path bin/operator/Cargo.toml
 
 # Final stage - use distroless
-FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
+FROM gcr.io/distroless/static-debian13:nonroot@sha256:18f4cc26c9ffa7f20a359298be7deadac5c607c8e03a02b8119f1a5fc2f82c99
 
 # Copy the static binary from builder
 COPY --from=builder /build/target/x86_64-unknown-linux-musl/release/operator /operator
