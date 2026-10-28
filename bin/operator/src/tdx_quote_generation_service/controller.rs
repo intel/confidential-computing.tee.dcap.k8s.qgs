@@ -505,7 +505,8 @@ async fn create_or_update_deployment(
         .ok_or_else(|| Error::Generic("Deployment template missing pod spec".to_string()))?;
 
     pod_spec.service_account_name = Some(
-        std::env::var("QGS_SERVICE_ACCOUNT").unwrap_or_else(|_| "intel-tdx-dcap-qgs".to_string()),
+        std::env::var("REGISTRAR_SERVICE_ACCOUNT")
+            .unwrap_or_else(|_| "intel-tdx-dcap-registrar".to_string()),
     );
 
     // Get the container

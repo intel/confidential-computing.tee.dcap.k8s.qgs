@@ -11,3 +11,6 @@ subjects:
 - kind: ServiceAccount
   name: qgs
   namespace: system
+- kind: ServiceAccount
+  name: registrar
+  namespace: system
