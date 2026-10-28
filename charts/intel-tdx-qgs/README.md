@@ -115,10 +115,12 @@ Namespace creation and Pod Security label changes should remain limited to clust
 
 ### Secrets in the namespace
 
-The QGS DaemonSet and the registrar share the `intel-tdx-dcap-qgs` ServiceAccount. Its Role grants
+The QGS DaemonSet runs under the `intel-tdx-dcap-qgs` ServiceAccount; in `Online` mode the
+registrar runs under its own `intel-tdx-dcap-registrar` ServiceAccount so its requests can be
+told apart from the QGS pods'. Both are bound to the same Role, which grants
 `get`, `list`, and `watch` on all Secrets in the namespace, because the platform-data and `<id>-pck`
 Secret names are only known at runtime. In `Online` and `Offline` modes, the Role also grants
-`create` and `patch` for platform registration. Pods running with this ServiceAccount can
+`create` and `patch` for platform registration. Pods running with either ServiceAccount can
 therefore access every Secret in the namespace, including Secrets of other nodes and any Secret
 not created by this chart. In `Online` mode this includes the Intel PCS API key Secret. To keep
 the key out of reach of the QGS pods, use `Offline` mode or run `Online` mode without an API key.
@@ -135,6 +137,8 @@ Check which identities can read Secrets in the namespace:
 ```bash
 kubectl auth can-i list secrets --namespace "$DCAP_NAMESPACE" \
   --as=system:serviceaccount:"$DCAP_NAMESPACE":intel-tdx-dcap-qgs
+kubectl auth can-i list secrets --namespace "$DCAP_NAMESPACE" \
+  --as=system:serviceaccount:"$DCAP_NAMESPACE":intel-tdx-dcap-registrar
 kubectl get rolebindings --namespace "$DCAP_NAMESPACE" -o wide
 ```
 

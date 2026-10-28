@@ -33,6 +33,12 @@ tdxQuoteGenerationService:
   # External omits platform registration and the efivars host mount.
   mode: Offline
 
+  # Create a ValidatingAdmissionPolicy (cluster-scoped, Kubernetes 1.30+) that only lets
+  # the QGS pods write platform-data secrets labeled with their own node, and no other
+  # secrets. It relies on the node name in the pods' service account tokens.
+  nodeAdmissionPolicy:
+    enabled: false
+
 # Intel PCS API key used by the registrar in Online mode. The key is optional:
 # without it, the registrar makes anonymous (shared rate-limited) PCS requests.
 pcsApiKey:
