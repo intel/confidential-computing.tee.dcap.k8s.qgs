@@ -31,6 +31,8 @@ spec:
         - $(NAMESPACE)
         - -e
         - /run/efivars
+        - --node-name
+        - $(NODE_NAME)
         env:
         - name: NAMESPACE
           valueFrom:
