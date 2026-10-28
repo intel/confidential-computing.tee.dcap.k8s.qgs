@@ -93,6 +93,10 @@ struct GetPlatformsArgs {
     /// need to be privileged.
     #[arg(short, long, default_value = "/sys/firmware/efi/efivars")]
     efivars_dir: PathBuf,
+    /// Name of the node, recorded in the platform-data secret's
+    /// trustedservices.intel.com/node label (e.g. `$(NODE_NAME)` from the downward API)
+    #[arg(long)]
+    node_name: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -299,13 +303,37 @@ fn get_platform_manifest(efivars_dir: &Path) -> Result<Option<String>> {
     Ok(Some(manifest))
 }
 
+/// Label of the platform-data secret recording the node it was created on.
+const LABEL_NODE: &str = "trustedservices.intel.com/node";
+
+/// Checks that `value` is a valid Kubernetes label value.
+fn validate_label_value(value: &str) -> Result<()> {
+    let bytes = value.as_bytes();
+    let valid_chars = bytes
+        .iter()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.'));
+    let alnum_ends = bytes.first().is_some_and(u8::is_ascii_alphanumeric)
+        && bytes.last().is_some_and(u8::is_ascii_alphanumeric);
+    if value.len() > 63 || !valid_chars || !alnum_ends {
+        bail!(
+            "{value:?} is not a valid label value (at most 63 alphanumerics, '-', '_' or '.', starting and ending with an alphanumeric)"
+        );
+    }
+    Ok(())
+}
+
 #[instrument(name = "get-platforms", skip(platform_info_binary, id_file, efivars_dir), fields(namespace = %namespace, secret = tracing::field::Empty))]
 async fn create_secret(
     platform_info_binary: &Path,
     id_file: Option<&Path>,
     namespace: &str,
     efivars_dir: &Path,
+    node_name: Option<&str>,
 ) -> Result<()> {
+    if let Some(node) = node_name {
+        validate_label_value(node).context("Invalid node name")?;
+    }
+
     // Get platform info from external binary (fixed-size arrays, stack allocated)
     let (cpu_svn, pce_id, pce_svn, qe_id) = get_platform_info(platform_info_binary)?;
 
@@ -362,6 +390,9 @@ async fn create_secret(
     });
     if let Some(ref manifest) = platform_manifest {
         secret["stringData"]["platform_manifest"] = serde_json::json!(manifest);
+    }
+    if let Some(node) = node_name {
+        secret["metadata"]["labels"][LABEL_NODE] = serde_json::json!(node);
     }
 
     // Create or update the secret using server-side apply. This node's platform data is
@@ -984,6 +1015,7 @@ async fn main() -> Result<()> {
                 get_args.id_file.as_deref(),
                 &get_args.namespace,
                 &get_args.efivars_dir,
+                get_args.node_name.as_deref(),
             )
             .await?;
         }
@@ -1222,5 +1254,15 @@ mod tests {
     #[test]
     fn test_resolve_id_neither_source_errors() {
         assert!(resolve_id(None, None).is_err());
+    }
+
+    #[test]
+    fn test_validate_label_value() {
+        for ok in ["node-1", "a", "worker.example.com", &"a".repeat(63)] {
+            assert!(validate_label_value(ok).is_ok(), "{ok}");
+        }
+        for bad in ["", "-node", "node-", "node/1", "nöde", &"a".repeat(64)] {
+            assert!(validate_label_value(bad).is_err(), "{bad}");
+        }
     }
 }

@@ -17,7 +17,8 @@ Get platform data and create Kubernetes secrets with platform manifest data.
 - If the EFI variable is absent (e.g. hidden by the BIOS after registration), still updates the
   secret but without `platform_manifest`; server-side apply keeps the stored manifest, and the
   update makes `register` re-request PCK certificates with the current CPU SVN and PCE ID
-- Labels secrets with `type=platform-data` for easy identification
+- Labels secrets with `type=platform-data` for easy identification, and, when `--node-name` is
+  given, with `trustedservices.intel.com/node=<node>` to record the node that wrote the secret
 - Optionally writes the ID (a QE ID) to a plain-text file (`--id-file`) on a volume shared with
   the `pck-certs-watcher` container, so that container doesn't need SGX enclave/device access
   itself (see [Sharing the ID with get-certificates](#sharing-the-id-with-get-certificates))
@@ -194,6 +195,8 @@ metadata:
   name: <qe_id>
   labels:
     type: platform-data
+    # Added when --node-name is given (the chart and operator pass the pod's node):
+    trustedservices.intel.com/node: <node_name>
 stringData:
   cpu_svn: "<CPU security version number from platform info binary>"
   enc_ppid: ""
@@ -210,7 +213,9 @@ The `platform_manifest` field contains the structure data from the EFI variable 
 
 All values except platform_manifest are extracted from the JSON output of the platform info binary.
 
-The secret is labeled with `type=platform-data` for easy identification and filtering.
+The secret is labeled with `type=platform-data` for easy identification and filtering. When
+`--node-name` is given, it is also labeled with `trustedservices.intel.com/node=<node>`, recording
+the node that wrote it so an admission policy can keep each node to its own platform data.
 
 ## PCK Certificate Secret Format
 
