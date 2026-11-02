@@ -49,6 +49,11 @@ Watch platform-data secrets and automatically register them with Intel PCS to ob
   - PCK certificates JSON array
 - Creates new secrets with `-pck` suffix containing base64-encoded cache files
 - Labels PCK secrets with `fmspc=<value>` extracted from the SGX-FMSPC response header
+- Retrieves the signed Platform Composition Manifest (PCM) from Intel PCS v4 API `/pcm`, verifies
+  its signature against the PCM Signing certificate from the `PCM-Issuer-Chain` (which must share
+  the PCK issuer chain's Root CA), and records it in a shared `piid-index` secret keyed by QE ID.
+  Unlike the PCK/TCB Info collateral (ECDSA P-256/SHA-256), the PCM is signed with ECDSA
+  P-384/SHA-384
 - Reconciles platform-data secrets with a Kubernetes controller: at most 4 registrations run
   concurrently and updates to the same secret are deduplicated
 - Validates platform-data secret contents before sending anything to Intel PCS; invalid secrets
@@ -146,6 +151,9 @@ The register command will:
 3. Send a POST request to Intel PCS API `/pckcerts/config` endpoint with platform-specific CPU SVN to retrieve matching PCK certificates
 4. Create a new secret named `<original_name>-pck` with the certificate data
 5. Label the new secret with `fmspc=<value>` from the API response
+6. Retrieve the signed Platform Composition Manifest from Intel PCS `/pcm`, verify its
+   ECDSA P-384/SHA-384 signature against the PCM-Issuer-Chain, and store it, keyed by QE ID, in the
+   shared `piid-index` secret
 
 ### get-certificates command
 

@@ -16,16 +16,14 @@ const ANNOTATION_PLATFORM_DATA_FINGERPRINT: &str =
 
 const ANNOTATION_EXPIRES_AT: &str = "trustedservices.intel.com/expires-at";
 
-/// Name of the shared secret that maps QE ID → PIID for all registered platforms.
-/// Each entry is patched independently using a per-QE-ID SSA field manager so
-/// concurrent registrar tasks cannot overwrite each other's keys.
+/// Name of the shared secret that maps QE ID → Platform Composition Manifest (PCM) for all
+/// registered platforms. Each entry is patched independently using a per-QE-ID SSA field manager
+/// so concurrent registrar tasks cannot overwrite each other's keys.
 const PIID_INDEX_SECRET_NAME: &str = "piid-index";
 
 pub struct CreatePckSecretInput {
-    pub qe_id: String,
     pub fmspc: String,
     pub cache_data: Vec<u8>,
-    pub piid: String,
     pub expiration_time: u64,
     pub namespace: String,
     pub platform_data_fingerprint: String,
@@ -150,10 +148,6 @@ pub async fn create_pck_secret(
         .patch(&input.pck_secret_name, &params, &Patch::Apply(&pck_secret))
         .await?;
 
-    // Update the PIID index with this platform's QE ID → PIID mapping.
-    // qe_id is derived from the platform-data secret name (which is the qe_id itself).
-    patch_piid_index(secrets, &input.qe_id, &input.piid).await?;
-
     info!(
         pck_secret = %input.pck_secret_name,
         namespace = %input.namespace,
@@ -187,17 +181,21 @@ fn pck_secret_manifest(input: &CreatePckSecretInput) -> serde_json::Value {
     })
 }
 
-/// Patch a single `qe_id → piid` entry into the shared PIID index secret.
+/// Patch a single `qe_id → PCM` entry into the shared PIID index secret.
+///
+/// The value is the full signed Platform Composition Manifest JSON returned by Intel PCS
+/// (`platformComposition` with the `platformInstanceId` and `deviceIds`, plus `signature` and
+/// `issuerCertificateChain`). `qe_id` is the platform-data secret name.
 ///
 /// Uses a per-`qe_id` SSA field manager so concurrent tasks patching different
 /// platforms into the same secret are always safe. The apply is forced so that an
 /// entry changed by another manager is taken back; it only covers this platform's key.
-#[instrument(skip(secrets))]
-async fn patch_piid_index(secrets: &Api<Secret>, qe_id: &str, piid: &str) -> anyhow::Result<()> {
+#[instrument(skip(secrets, pcm))]
+pub async fn patch_piid_index(secrets: &Api<Secret>, qe_id: &str, pcm: &str) -> anyhow::Result<()> {
     // Per-QE-ID manager so concurrent tasks only own their own piid-index key.
     let field_manager = format!("{FIELD_MANAGER}/{qe_id}");
     let params = PatchParams::apply(&field_manager).force();
-    let patch = piid_index_patch(qe_id, piid);
+    let patch = piid_index_patch(qe_id, pcm);
 
     secrets
         .patch(PIID_INDEX_SECRET_NAME, &params, &Patch::Apply(&patch))
@@ -207,7 +205,7 @@ async fn patch_piid_index(secrets: &Api<Secret>, qe_id: &str, piid: &str) -> any
     Ok(())
 }
 
-fn piid_index_patch(qe_id: &str, piid: &str) -> serde_json::Value {
+fn piid_index_patch(qe_id: &str, pcm: &str) -> serde_json::Value {
     serde_json::json!({
         "apiVersion": "v1",
         "kind": "Secret",
@@ -216,7 +214,7 @@ fn piid_index_patch(qe_id: &str, piid: &str) -> serde_json::Value {
         },
         "type": "Opaque",
         "data": {
-            qe_id: base64::engine::general_purpose::STANDARD.encode(piid),
+            qe_id: base64::engine::general_purpose::STANDARD.encode(pcm),
         },
     })
 }
@@ -227,10 +225,8 @@ mod tests {
 
     fn input() -> CreatePckSecretInput {
         CreatePckSecretInput {
-            qe_id: "00112233445566778899aabbccddeeff".to_string(),
             fmspc: "AABBCCDDEEFF".to_string(),
             cache_data: vec![0, 1, 2, 255],
-            piid: "piid-value".to_string(),
             expiration_time: 12345,
             namespace: "intel-dcap-operator-system".to_string(),
             platform_data_fingerprint: "sha256:fingerprint".to_string(),
@@ -261,15 +257,15 @@ mod tests {
     }
 
     #[test]
-    fn piid_patch_uses_qe_id_key_and_encoded_piid() {
-        let input = input();
-        let patch = piid_index_patch(&input.qe_id, &input.piid);
+    fn piid_patch_uses_qe_id_key_and_encoded_pcm() {
+        let qe_id = "00112233445566778899aabbccddeeff";
+        let patch = piid_index_patch(qe_id, "pcm-value");
 
         assert_eq!(patch["apiVersion"], "v1");
         assert_eq!(patch["kind"], "Secret");
         assert_eq!(patch["metadata"]["name"], PIID_INDEX_SECRET_NAME);
         assert_eq!(patch["type"], "Opaque");
-        assert_eq!(patch["data"][&input.qe_id], "cGlpZC12YWx1ZQ==");
+        assert_eq!(patch["data"][qe_id], "cGNtLXZhbHVl");
         assert_eq!(patch["data"].as_object().map(|data| data.len()), Some(1));
     }
 
