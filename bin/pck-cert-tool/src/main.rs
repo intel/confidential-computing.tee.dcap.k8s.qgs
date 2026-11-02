@@ -37,6 +37,12 @@ use tracing::{debug, error, info, instrument, warn};
 /// Backoff delay between watch error retries to prevent log storms during API server downtime.
 const K8S_API_WATCH_ERROR_BACKOFF: Duration = Duration::from_secs(10);
 
+/// Connection timeout for Intel PCS API requests.
+const PCS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Overall per-request timeout for Intel PCS API requests, bounding slow or stalled responses.
+const PCS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// EFI variable name for SGX platform manifest
 const SGX_PLATFORM_MANIFEST_EFI_VAR: &str =
     "SgxRegistrationServerRequest-304e0796-d515-4698-ac6e-e76cb1a71c28";
@@ -638,6 +644,11 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
         });
     let http_client = reqwest::Client::builder()
         .retry(retry_policy)
+        // Bound requests so a stalled PCS endpoint can't block registration indefinitely.
+        .connect_timeout(PCS_CONNECT_TIMEOUT)
+        .timeout(PCS_REQUEST_TIMEOUT)
+        // PCS never redirects; don't follow 3xx so requests stay on the pinned host.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .context("Failed to build HTTP client")?;
 
