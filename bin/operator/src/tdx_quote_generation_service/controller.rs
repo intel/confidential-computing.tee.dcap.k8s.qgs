@@ -748,8 +748,8 @@ fn owner_ref<K: kube::Resource>(obj: K) -> Option<ObjectRef<TdxQuoteGenerationSe
 
 /// Start the TdxQuoteGenerationService controller
 ///
-/// This sets up the controller with the watcher configuration and starts
-/// the reconciliation loop.
+/// This sets up the controller with the watcher configuration and runs the
+/// reconciliation loop until SIGTERM or Ctrl-C, letting in-flight reconciles finish.
 pub async fn run(client: Client) -> Result<()> {
     let api: Api<TdxQuoteGenerationService> = Api::all(client.clone());
     let namespace = operator_namespace();
@@ -766,6 +766,7 @@ pub async fn run(client: Client) -> Result<()> {
     Controller::new(api, watcher::Config::default())
         .watches(daemonsets, watcher::Config::default(), owner_ref)
         .watches(deployments, watcher::Config::default(), owner_ref)
+        .shutdown_on_signal()
         .run(reconcile, error_policy, ctx)
         .for_each(|res| async move {
             match res {
