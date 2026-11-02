@@ -206,6 +206,22 @@ done
 log "Platform-data secrets (${_count}): $PLATFORM_DATA_SECRETS"
 
 # ---------------------------------------------------------------------------
+# 6b. Verify each platform-data secret is labeled with the node that wrote it
+# ---------------------------------------------------------------------------
+
+log "Verifying trustedservices.intel.com/node labels on platform-data secrets"
+_nodes=$(kubectl get nodes -o jsonpath='{.items[*].metadata.name}')
+for QE_ID in $PLATFORM_DATA_SECRETS; do
+    _node=$(kubectl get secret "$QE_ID" -n "$QGS_NAMESPACE" \
+        -o jsonpath='{.metadata.labels.trustedservices\.intel\.com/node}' 2>/dev/null || true)
+    [[ -n "$_node" ]] \
+        || fail "platform-data secret $QE_ID has no trustedservices.intel.com/node label"
+    echo " $_nodes " | grep -q " $_node " \
+        || fail "platform-data secret $QE_ID labeled with unknown node '$_node'"
+    log "PASS: $QE_ID labeled node=$_node"
+done
+
+# ---------------------------------------------------------------------------
 # 7a. Verify tdx-qgs is still Waiting (startupProbe gate is holding)
 # ---------------------------------------------------------------------------
 
