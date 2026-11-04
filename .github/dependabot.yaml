@@ -7,6 +7,10 @@ updates:
     open-pull-requests-limit: 3
     allow:
       - dependency-type: direct
+    cooldown:
+      exclude:
+        - "kube"
+        - "k8s-openapi"
     groups:
       kube-rs:
         patterns:
