@@ -17,8 +17,8 @@ use kube::{
 };
 use pck_cert_tool::cache::{build_cache_blob, parse_cache_blob};
 use pck_cert_tool::pcs_client::{
-    PckCertsRequest, PcsApiError, PcsPause, PcsRateLimited, fetch_pck_certs, fetch_tcb_info,
-    filter_and_verify_pck_certs, validate_tcb_info, verify_tcb_info,
+    PckCertsRequest, PcsApiError, PcsPause, PcsRateLimited, fetch_pck_certs, fetch_pcm,
+    fetch_tcb_info, filter_and_verify_pck_certs, validate_tcb_info, verify_pcm, verify_tcb_info,
 };
 use pck_cert_tool::platform_data::{
     QE_ID_HEX_LEN, is_fixed_len_hex, prepare_registration, registration_fingerprint,
@@ -568,18 +568,22 @@ async fn watch_certificates(
     Ok(())
 }
 
-/// Name of the shared secret that maps QE ID → PIID for all registered platforms.
-/// Each entry is patched independently using a per-QE-ID SSA field manager so
-/// concurrent registrar tasks cannot overwrite each other's keys.
+/// Name of the shared secret that maps QE ID → Platform Composition Manifest (PCM) for all
+/// registered platforms. Each entry is patched independently using a per-QE-ID SSA field manager
+/// so concurrent registrar tasks cannot overwrite each other's keys.
 const PIID_INDEX_SECRET_NAME: &str = "piid-index";
 
-/// Patch a single `qe_id → piid` entry into the shared PIID index secret.
+/// Patch a single `qe_id → PCM` entry into the shared index secret.
+///
+/// The value is the full signed Platform Composition Manifest JSON returned by Intel PCS
+/// (`platformComposition` with the `platformInstanceId` and `deviceIds`, plus `signature` and
+/// `issuerCertificateChain`).
 ///
 /// Uses a per-`qe_id` SSA field manager so concurrent tasks patching different
 /// platforms into the same secret are always safe. The apply is forced so that an
 /// entry changed by another manager is taken back; it only covers this platform's key.
-#[instrument(skip(secrets))]
-async fn patch_piid_index(secrets: &Api<Secret>, qe_id: &str, piid: &str) -> Result<()> {
+#[instrument(skip(secrets, pcm_json))]
+async fn patch_piid_index(secrets: &Api<Secret>, qe_id: &str, pcm_json: &str) -> Result<()> {
     let field_manager = format!("{FIELD_MANAGER}/{qe_id}");
     let params = PatchParams::apply(&field_manager).force();
 
@@ -591,7 +595,7 @@ async fn patch_piid_index(secrets: &Api<Secret>, qe_id: &str, piid: &str) -> Res
         },
         "type": "Opaque",
         "data": {
-            qe_id: base64::engine::general_purpose::STANDARD.encode(piid),
+            qe_id: base64::engine::general_purpose::STANDARD.encode(pcm_json),
         },
     });
 
@@ -929,8 +933,7 @@ async fn register_platform(
 
     // Filter and verify PCK certificates
     debug!("Filtering and verifying PCK certificates");
-    let (filtered_pck_certs_json, piid) =
-        filter_and_verify_pck_certs(&pck_certs_json, &cert_chain)?;
+    let filtered_pck_certs_json = filter_and_verify_pck_certs(&pck_certs_json, &cert_chain)?;
 
     let tcb_info_response = fetch_tcb_info(http_client, &fmspc).await?;
     let tcb_info = tcb_info_response.body;
@@ -986,9 +989,12 @@ async fn register_platform(
         .patch(&pck_secret_name, &params, &Patch::Apply(&pck_secret))
         .await?;
 
-    // Update the PIID index with this platform's QE ID → PIID mapping.
-    // qe_id is derived from the platform-data secret name (which is the qe_id itself).
-    patch_piid_index(secrets, secret_name, &piid).await?;
+    // Retrieve the signed Platform Composition Manifest (PCM) for this platform, verify it, and
+    // store it keyed by the QE ID (which is the platform-data secret name).
+    let pcm = fetch_pcm(http_client, api_key, &request_body.platform_manifest).await?;
+    verify_pcm(&pcm.body, &pcm.issuer_chain, &cert_chain)
+        .context("Failed to verify the Platform Composition Manifest")?;
+    patch_piid_index(secrets, secret_name, &pcm.body).await?;
 
     info!(
         pck_secret = %pck_secret_name,

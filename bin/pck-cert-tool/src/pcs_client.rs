@@ -12,7 +12,6 @@ use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 use tracing::{debug, error, info, instrument};
 use url::Url;
-use x509_parser::der_parser::{oid, oid::Oid, parse_der};
 use x509_parser::pem::Pem;
 use x509_parser::prelude::{parse_x509_certificate, parse_x509_pem};
 use x509_parser::x509::SubjectPublicKeyInfo;
@@ -28,6 +27,9 @@ const INTEL_PCS_PCKCERTS_ENDPOINT: &str = "pckcerts/config";
 
 /// Intel PCS API endpoint for TCB info (requires fmspc parameter).
 const INTEL_PCS_TCB_ENDPOINT: &str = "tcb";
+
+/// Intel PCS API endpoint for the Platform Composition Manifest (POST platformManifest).
+const INTEL_PCS_PCM_ENDPOINT: &str = "pcm";
 
 /// FMSPC (Family-Model-Stepping-Platform-CustomSKU) length: 6 bytes as hex.
 pub const FMSPC_HEX_LEN: usize = 12;
@@ -296,6 +298,62 @@ pub async fn fetch_pck_certs(
     })
 }
 
+/// Successful response from the Platform Composition Manifest (PCM) endpoint.
+pub struct PcmResponse {
+    /// Raw JSON body: the full signed PCM (`platformComposition`, `signature`,
+    /// `issuerCertificateChain`).
+    pub body: String,
+    /// Value of the `PCM-Issuer-Chain` response header (URL-encoded PEM chain:
+    /// PCM Signing cert + Root CA).
+    pub issuer_chain: String,
+}
+
+/// Fetch the Platform Composition Manifest (PCM) for a multi-package platform.
+///
+/// Posts the platform manifest to Intel PCS and returns the full signed PCM JSON together with
+/// the `PCM-Issuer-Chain` header needed to verify it.
+#[instrument(skip(http_client, api_key, platform_manifest))]
+pub async fn fetch_pcm(
+    http_client: &reqwest::Client,
+    api_key: Option<&str>,
+    platform_manifest: &str,
+) -> Result<PcmResponse> {
+    let url = PCS_BASE_URL
+        .join(INTEL_PCS_PCM_ENDPOINT)
+        .context("Failed to construct PCM URL")?;
+
+    let body = serde_json::json!({ "platformManifest": platform_manifest });
+    let mut request = http_client.post(url.as_str()).json(&body);
+    if let Some(key) = api_key {
+        request = request.header("Ocp-Apim-Subscription-Key", key);
+    }
+
+    let response = request
+        .send()
+        .await
+        .with_context(|| format!("HTTP POST to {url} failed"))?;
+
+    if !response.status().is_success() {
+        return Err(handle_pcs_api_error(response, url.as_str()).await);
+    }
+
+    let issuer_chain = response
+        .headers()
+        .get("PCM-Issuer-Chain")
+        .and_then(|v| v.to_str().ok())
+        .context("Missing PCM-Issuer-Chain header in PCM response")?
+        .to_string();
+
+    let body = response
+        .text()
+        .await
+        .context("Failed to read PCM response body")?;
+
+    info!("Received Platform Composition Manifest");
+
+    Ok(PcmResponse { body, issuer_chain })
+}
+
 /// Validates an FMSPC value before it's used in the TCB Info query and as a label value.
 pub fn validate_fmspc(fmspc: &str) -> Result<()> {
     anyhow::ensure!(
@@ -349,12 +407,6 @@ pub async fn fetch_tcb_info(http_client: &reqwest::Client, fmspc: &str) -> Resul
     Ok(TcbInfoResponse { body, issuer_chain })
 }
 
-/// OID for the Intel SGX PCK certificate extension
-const SGX_PCK_EXT_OID: Oid<'static> = oid!(1.2.840.113741.1.13.1);
-
-/// OID for the Platform Instance ID (PIID) within the SGX PCK extension — 16-byte octet string
-const SGX_PIID_OID: Oid<'static> = oid!(1.2.840.113741.1.13.1.6);
-
 /// TCB Info structure for validation (partial - only fields we need)
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -384,6 +436,9 @@ struct SignedTcbInfo<'a> {
 /// Length of an ECDSA P-256 signature in the fixed r||s encoding.
 const ECDSA_P256_SIGNATURE_LEN: usize = 64;
 
+/// Length of an ECDSA P-384 signature in the fixed r||s encoding.
+const ECDSA_P384_SIGNATURE_LEN: usize = 96;
+
 /// PCK Certificate entry from Intel PCS API response
 #[derive(Deserialize, Serialize, Debug, Clone)]
 struct PckCertEntry {
@@ -399,50 +454,6 @@ fn verify_certificate(cert_pem: &str, issuer_spki: &SubjectPublicKeyInfo<'_>) ->
     let (_, cert) = parse_x509_certificate(&pem.contents)
         .map_err(|e| anyhow!("Failed to parse PCK certificate: {e}"))?;
     Ok(cert.verify_signature(Some(issuer_spki)).is_ok())
-}
-
-fn extract_piid(pem: &str) -> Result<String> {
-    let (_, pem_obj) =
-        parse_x509_pem(pem.as_bytes()).map_err(|e| anyhow!("Failed to parse PEM: {e}"))?;
-    let (_, cert) = parse_x509_certificate(&pem_obj.contents)
-        .map_err(|e| anyhow!("Failed to parse certificate: {e}"))?;
-
-    let ext = cert
-        .get_extension_unique(&SGX_PCK_EXT_OID)
-        .context("Duplicate SGX PCK extension in certificate")?
-        .context("SGX PCK extension not found in certificate")?;
-
-    let (_, outer) =
-        parse_der(ext.value).map_err(|e| anyhow!("Failed to parse SGX extension DER: {e}"))?;
-
-    for item in outer
-        .as_sequence()
-        .context("SGX extension is not a SEQUENCE")?
-    {
-        let inner = item
-            .as_sequence()
-            .context("SGX sub-extension is not a SEQUENCE")?;
-
-        if inner.len() < 2 {
-            continue;
-        }
-
-        let item_oid = inner[0].as_oid_val().context("Failed to parse sub-OID")?;
-
-        if item_oid == SGX_PIID_OID {
-            let bytes = inner[1]
-                .as_slice()
-                .context("PIID value is not an OCTET STRING")?;
-
-            if bytes.len() != 16 {
-                bail!("Expected 16 bytes for PIID, got {}", bytes.len());
-            }
-
-            return Ok(bytes.iter().map(|b| format!("{b:02x}")).collect());
-        }
-    }
-
-    bail!("PIID OID (1.2.840.113741.1.13.1.6) not found in SGX PCK extension")
 }
 
 /// Decodes a URL-encoded PEM issuer chain as returned in Intel PCS response headers and
@@ -514,11 +525,32 @@ fn decode_hex<const N: usize>(s: &str) -> Result<[u8; N]> {
     Ok(bytes)
 }
 
-/// Filter out unavailable PCK certificates from an Intel PCS `/pckcerts` response, verify the
-/// remaining ones against the issuer chain from the `SGX-PCK-Certificate-Issuer-Chain` header,
-/// and extract the PIID from the first one.
+/// Verifies a hex-encoded, fixed-length `r||s` ECDSA signature over `body` against an uncompressed
+/// EC `signer_public_key`, using the given ring verification algorithm. `SIG_LEN` is the expected
+/// signature length in bytes (64 for P-256, 96 for P-384) and `collateral` names the signed object
+/// for error messages. Intel's PCS collateral differs in curve: TCB Info/PCK use P-256/SHA-256
+/// while the PCM uses P-384/SHA-384.
+fn verify_fixed_ecdsa_signature<const SIG_LEN: usize>(
+    algorithm: &'static dyn ring::signature::VerificationAlgorithm,
+    signer_public_key: &[u8],
+    body: &[u8],
+    signature_hex: &str,
+    collateral: &str,
+) -> Result<()> {
+    let signature = decode_hex::<SIG_LEN>(signature_hex)
+        .with_context(|| format!("Invalid {collateral} signature encoding"))?;
+
+    ring::signature::UnparsedPublicKey::new(algorithm, signer_public_key)
+        .verify(body, &signature)
+        .map_err(|_| anyhow!("{collateral} signature verification failed"))?;
+
+    Ok(())
+}
+
+/// Filter out unavailable PCK certificates from an Intel PCS `/pckcerts` response and verify the
+/// remaining ones against the issuer chain from the `SGX-PCK-Certificate-Issuer-Chain` header.
 ///
-/// Returns the filtered certificates as JSON (certificates kept URL-encoded) and the PIID.
+/// Returns the filtered certificates as JSON (certificates kept URL-encoded).
 ///
 /// Note: the issuer chain is only checked for internal consistency (a self-signed Root CA that
 /// signed the Intermediate CA, which signed every PCK certificate). The Root CA is not pinned to
@@ -526,10 +558,7 @@ fn decode_hex<const N: usize>(s: &str) -> Result<[u8; N]> {
 /// chain is embedded in quotes and verified against the Intel SGX Root CA during quote
 /// verification, but a response with an unrelated chain is only detected at that point.
 #[instrument(skip(pck_certs_json, cert_chain))]
-pub fn filter_and_verify_pck_certs(
-    pck_certs_json: &str,
-    cert_chain: &str,
-) -> Result<(String, String)> {
+pub fn filter_and_verify_pck_certs(pck_certs_json: &str, cert_chain: &str) -> Result<String> {
     // Parse the JSON array
     let pck_certs: Vec<PckCertEntry> =
         serde_json::from_str(pck_certs_json).context("Failed to parse PCK certificates JSON")?;
@@ -595,13 +624,7 @@ pub fn filter_and_verify_pck_certs(
     let filtered_json = serde_json::to_string(&filtered_certs)
         .context("Failed to serialize filtered certificates")?;
 
-    // Extract PIID from the topmost (first) certificate in the filtered list
-    let first_cert_pem = urlencoding::decode(&filtered_certs[0].cert)
-        .context("Failed to URL-decode first PCK certificate")?;
-    let piid = extract_piid(&first_cert_pem)
-        .context("Failed to extract PIID from first PCK certificate")?;
-
-    Ok((filtered_json, piid))
+    Ok(filtered_json)
 }
 
 /// Validate the TCB Info JSON returned by Intel PCS. Only standard SGX TCB Info (`tcbType` 0)
@@ -634,15 +657,13 @@ fn verify_tcb_info_signature(
     let signed: SignedTcbInfo<'_> =
         serde_json::from_str(tcb_info_json).context("Failed to parse signed TCB Info JSON")?;
 
-    let signature = decode_hex::<ECDSA_P256_SIGNATURE_LEN>(signed.signature)
-        .context("Invalid TCB Info signature encoding")?;
-
-    ring::signature::UnparsedPublicKey::new(
+    verify_fixed_ecdsa_signature::<ECDSA_P256_SIGNATURE_LEN>(
         &ring::signature::ECDSA_P256_SHA256_FIXED,
         signer_public_key,
-    )
-    .verify(signed.tcb_info.get().as_bytes(), &signature)
-    .map_err(|_| anyhow!("TCB Info signature verification failed"))?;
+        signed.tcb_info.get().as_bytes(),
+        signed.signature,
+        "TCB Info",
+    )?;
 
     let tcb_info: TcbInfo = serde_json::from_str(signed.tcb_info.get())
         .context("Failed to parse signed tcbInfo object")?;
@@ -684,9 +705,76 @@ pub fn verify_tcb_info(
     )
 }
 
+/// Signed Platform Composition Manifest as returned by Intel PCS. `platform_composition` keeps the
+/// raw JSON text so the exact signed bytes are available.
+#[derive(Deserialize)]
+struct SignedPcm<'a> {
+    #[serde(borrow, rename = "platformComposition")]
+    platform_composition: &'a serde_json::value::RawValue,
+    signature: &'a str,
+}
+
+/// Verify the PCM signature over the `platformComposition` body against the PCM Signing Key.
+///
+/// The signature is ECDSA over P-384 with SHA-384 in the fixed r||s encoding, computed over the raw
+/// `platformComposition` body bytes. PCS returns compact JSON (no insignificant whitespace), so the
+/// raw body is signed verbatim, the same way TCB Info is verified.
+fn verify_pcm_signature(pcm_json: &str, signer_public_key: &[u8]) -> Result<()> {
+    let signed: SignedPcm<'_> =
+        serde_json::from_str(pcm_json).context("Failed to parse signed PCM JSON")?;
+
+    verify_fixed_ecdsa_signature::<ECDSA_P384_SIGNATURE_LEN>(
+        &ring::signature::ECDSA_P384_SHA384_FIXED,
+        signer_public_key,
+        signed.platform_composition.get().as_bytes(),
+        signed.signature,
+        "PCM",
+    )
+}
+
+/// Verifies a Platform Composition Manifest returned by Intel PCS: the `PCM-Issuer-Chain` must be a
+/// valid Root CA -> PCM Signing chain rooted at the same Root CA as the PCK certificate issuer
+/// chain, and the PCM signature must verify against the PCM Signing certificate.
+pub fn verify_pcm(pcm_json: &str, pcm_issuer_chain: &str, pck_issuer_chain: &str) -> Result<()> {
+    let (pcm_root_der, signer_der) =
+        decode_and_validate_issuer_chain(pcm_issuer_chain).context("Invalid PCM issuer chain")?;
+    let (pck_root_der, _) = decode_and_validate_issuer_chain(pck_issuer_chain)
+        .context("Invalid PCK certificate issuer chain")?;
+
+    if pcm_root_der != pck_root_der {
+        bail!("PCM issuer chain Root CA does not match the PCK certificate issuer Root CA");
+    }
+
+    let (_, signer_cert) = parse_x509_certificate(&signer_der)
+        .map_err(|e| anyhow!("Failed to parse PCM Signing certificate: {e}"))?;
+
+    verify_pcm_signature(pcm_json, &signer_cert.public_key().subject_public_key.data)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn signed_pcm_exposes_raw_platform_composition() {
+        // Shape taken from the Intel PCS "Retrieve PCM V4" example response.
+        let body = r#"{"platformComposition":{"id":"PCM","version":1,"platformInstanceId":"ABCDEABCDEABCDEABCDE012345678912","deviceIds":["AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"]},"signature":"35e8b7","issuerCertificateChain":["MIICpj","MIICez"]}"#;
+
+        let signed: SignedPcm<'_> = serde_json::from_str(body).expect("example PCM should parse");
+        assert_eq!(signed.signature, "35e8b7");
+        // The raw platformComposition text is preserved verbatim for signature verification.
+        assert!(
+            signed
+                .platform_composition
+                .get()
+                .starts_with(r#"{"id":"PCM""#)
+        );
+    }
+
+    #[test]
+    fn signed_pcm_rejects_response_without_platform_composition() {
+        assert!(serde_json::from_str::<SignedPcm>(r#"{"signature":"00"}"#).is_err());
+    }
 
     #[test]
     fn pcs_pause() {
