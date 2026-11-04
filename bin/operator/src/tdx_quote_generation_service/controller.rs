@@ -409,8 +409,9 @@ async fn create_or_update_daemonset(
     // Get mutable reference to pod spec
     let pod_spec = ds
         .spec
+        .template
+        .spec
         .as_mut()
-        .and_then(|s| s.template.spec.as_mut())
         .ok_or_else(|| Error::Generic("DaemonSet template missing pod spec".to_string()))?;
 
     pod_spec.service_account_name = Some(
@@ -500,8 +501,9 @@ async fn create_or_update_deployment(
     // Get mutable reference to pod spec
     let pod_spec = deploy
         .spec
+        .template
+        .spec
         .as_mut()
-        .and_then(|s| s.template.spec.as_mut())
         .ok_or_else(|| Error::Generic("Deployment template missing pod spec".to_string()))?;
 
     pod_spec.service_account_name = Some(
@@ -787,12 +789,12 @@ mod tests {
     #[test]
     fn templates_parse() {
         let ds: DaemonSet = serde_saphyr::from_str(DAEMONSET_TEMPLATE).unwrap();
-        let ds_spec = ds.spec.unwrap().template.spec.unwrap();
+        let ds_spec = ds.spec.template.spec.unwrap();
         assert_eq!(ds_spec.containers[0].name, "tdx-qgs");
         assert!(ds_spec.init_containers.is_some_and(|c| !c.is_empty()));
 
         let deploy: Deployment = serde_saphyr::from_str(DEPLOYMENT_TEMPLATE).unwrap();
-        let deploy_spec = deploy.spec.unwrap().template.spec.unwrap();
+        let deploy_spec = deploy.spec.template.spec.unwrap();
         assert!(!deploy_spec.containers.is_empty());
     }
 
