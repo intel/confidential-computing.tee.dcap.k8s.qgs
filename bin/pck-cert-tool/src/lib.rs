@@ -5,6 +5,7 @@
 //! encoding logic, exposed so it can be unit tested and fuzzed in isolation.
 
 pub mod cache;
+pub mod offline;
 pub mod pck_secret;
 pub mod pcs_client;
 pub mod platform_data;
