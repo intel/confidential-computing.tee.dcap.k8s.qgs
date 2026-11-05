@@ -33,6 +33,8 @@ spec:
               fieldPath: metadata.namespace
         - name: QGS_SERVICE_ACCOUNT
           value: placeholder-replaced-by-kustomize
+        - name: REGISTRAR_SERVICE_ACCOUNT
+          value: placeholder-replaced-by-kustomize
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:

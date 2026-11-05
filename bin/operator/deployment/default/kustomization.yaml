@@ -31,3 +31,13 @@ replacements:
       name: controller-manager
     fieldPaths:
     - spec.template.spec.containers.[name=operator].env.[name=QGS_SERVICE_ACCOUNT].value
+- source:
+    kind: ServiceAccount
+    name: registrar
+    fieldPath: metadata.name
+  targets:
+  - select:
+      kind: Deployment
+      name: controller-manager
+    fieldPaths:
+    - spec.template.spec.containers.[name=operator].env.[name=REGISTRAR_SERVICE_ACCOUNT].value

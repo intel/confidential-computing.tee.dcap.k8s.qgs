@@ -34,5 +34,10 @@ subjects:
   - kind: ServiceAccount
     name: intel-tdx-dcap-qgs
     namespace: {{ .Release.Namespace }}
+  {{- if eq .Values.tdxQuoteGenerationService.mode "Online" }}
+  - kind: ServiceAccount
+    name: intel-tdx-dcap-registrar
+    namespace: {{ .Release.Namespace }}
+  {{- end }}
 {{- end }}
 
