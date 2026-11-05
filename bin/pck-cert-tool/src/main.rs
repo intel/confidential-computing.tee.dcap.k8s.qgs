@@ -16,6 +16,7 @@ use kube::{
     },
 };
 use pck_cert_tool::cache::{build_cache_blob, parse_cache_blob};
+use pck_cert_tool::field_manager::{field_manager, scoped_field_manager};
 use pck_cert_tool::pcs_client::{
     PckCertsRequest, PcsApiError, PcsPause, PcsRateLimited, build_pcs_http_client, fetch_pck_certs,
     fetch_tcb_info, filter_and_verify_pck_certs, validate_tcb_info, verify_tcb_info,
@@ -44,10 +45,6 @@ const SGX_PLATFORM_MANIFEST_EFI_VAR: &str =
 /// Reserved all-zero QE ID, used as the QPL cache file name when the actual ID isn't
 /// guaranteed to be a real QE ID (e.g. a node name in External mode).
 const ZERO_ID: &str = "00000000000000000000000000000000";
-
-/// Server-side apply field manager for all Secrets written by this tool. Keep it stable:
-/// changing it leaves the field ownership in existing Secrets with the old manager.
-const FIELD_MANAGER: &str = "pck-cert-tool";
 
 /// Platform info fields returned by the external platform-info binary:
 /// (cpu_svn, enc_ppid, pce_id, pce_svn, qe_id) — enc_ppid is present in binary output but not used
@@ -398,7 +395,7 @@ async fn create_secret(
     // Create or update the secret using server-side apply. This node's platform data is
     // authoritative, so take over fields that other managers (e.g. `kubectl edit`) changed
     // instead of failing with a conflict.
-    let params = PatchParams::apply(FIELD_MANAGER).force();
+    let params = PatchParams::apply(field_manager()).force();
 
     secrets
         .patch(qe_id_str, &params, &Patch::Apply(&secret))
@@ -574,7 +571,7 @@ const PIID_INDEX_SECRET_NAME: &str = "piid-index";
 /// entry changed by another manager is taken back; it only covers this platform's key.
 #[instrument(skip(secrets))]
 async fn patch_piid_index(secrets: &Api<Secret>, qe_id: &str, piid: &str) -> Result<()> {
-    let field_manager = format!("{FIELD_MANAGER}/{qe_id}");
+    let field_manager = scoped_field_manager(qe_id);
     let params = PatchParams::apply(&field_manager).force();
 
     let patch = serde_json::json!({
@@ -950,7 +947,7 @@ async fn register_platform(
     // Create or update the secret using server-side apply. The certificates just fetched from
     // Intel PCS are authoritative, so take over fields that other managers changed instead of
     // failing with a conflict.
-    let params = PatchParams::apply(FIELD_MANAGER).force();
+    let params = PatchParams::apply(field_manager()).force();
 
     secrets
         .patch(&pck_secret_name, &params, &Patch::Apply(&pck_secret))
