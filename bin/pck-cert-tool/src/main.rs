@@ -15,11 +15,11 @@ use kube::{
         watcher,
     },
 };
-use pck_cert_tool::cache::{build_cache_blob, parse_cache_blob};
+use pck_cert_tool::cache::parse_cache_blob;
 use pck_cert_tool::field_manager::{field_manager, scoped_field_manager};
 use pck_cert_tool::pcs_client::{
-    PckCertsRequest, PcsApiError, PcsPause, PcsRateLimited, build_pcs_http_client, fetch_pck_certs,
-    fetch_tcb_info, filter_and_verify_pck_certs, validate_tcb_info, verify_tcb_info,
+    PckCertsRequest, PcsApiError, PcsPause, PcsRateLimited, build_pcs_http_client,
+    fetch_platform_cache,
 };
 use pck_cert_tool::platform_data::{
     QE_ID_HEX_LEN, is_fixed_len_hex, prepare_registration, registration_fingerprint,
@@ -887,44 +887,11 @@ async fn register_platform(
     let pck_secret_name = format!("{secret_name}-pck");
 
     info!("Requesting PCK certificates from Intel PCS API");
-
-    // Fetch PCK certificates from Intel PCS API
-    let pck_response = fetch_pck_certs(http_client, api_key, request_body).await?;
-    let fmspc = pck_response.fmspc;
-    let cert_chain = pck_response.cert_chain;
-    let pck_certs_json = pck_response.pck_certs_json;
-
-    // Filter and verify PCK certificates
-    debug!("Filtering and verifying PCK certificates");
-    let (filtered_pck_certs_json, piid) =
-        filter_and_verify_pck_certs(&pck_certs_json, &cert_chain)?;
-
-    let tcb_info_response = fetch_tcb_info(http_client, &fmspc).await?;
-    let tcb_info = tcb_info_response.body;
-
-    // Validate TCB Info structure
-    debug!("Validating TCB Info");
-    validate_tcb_info(&tcb_info)?;
-    debug!("TCB Info validation passed (tcbType=0)");
-
-    debug!("Verifying TCB Info signature");
-    verify_tcb_info(
-        &tcb_info,
-        &tcb_info_response.issuer_chain,
-        &cert_chain,
-        &fmspc,
-    )?;
-
-    let (cache_data, expiration_time) = build_cache_blob(
-        &request_body.cpu_svn,
-        &tcb_info,
-        &cert_chain,
-        &filtered_pck_certs_json,
-    )?;
+    let platform_cache = fetch_platform_cache(http_client, api_key, request_body).await?;
 
     // Create new secret with -pck suffix
     let mut labels = BTreeMap::new();
-    labels.insert("fmspc".to_string(), fmspc.clone());
+    labels.insert("fmspc".to_string(), platform_cache.fmspc.clone());
 
     let pck_secret = serde_json::json!({
         "apiVersion": "v1",
@@ -935,12 +902,12 @@ async fn register_platform(
             "labels": labels,
             "annotations": {
                 ANNOTATION_PLATFORM_DATA_FINGERPRINT: platform_data_fingerprint,
-                ANNOTATION_EXPIRES_AT: expiration_time.to_string(),
+                ANNOTATION_EXPIRES_AT: platform_cache.expiration_time.to_string(),
             },
         },
         "type": "Opaque",
         "data": {
-            "certificate": base64::engine::general_purpose::STANDARD.encode(&cache_data),
+            "certificate": base64::engine::general_purpose::STANDARD.encode(&platform_cache.cache_data),
         },
     });
 
@@ -955,12 +922,12 @@ async fn register_platform(
 
     // Update the PIID index with this platform's QE ID → PIID mapping.
     // qe_id is derived from the platform-data secret name (which is the qe_id itself).
-    patch_piid_index(secrets, secret_name, &piid).await?;
+    patch_piid_index(secrets, secret_name, &platform_cache.piid).await?;
 
     info!(
         pck_secret = %pck_secret_name,
         namespace = %namespace,
-        fmspc = %fmspc,
+        fmspc = %platform_cache.fmspc,
         "Created/updated secret with PCK certificates"
     );
 
