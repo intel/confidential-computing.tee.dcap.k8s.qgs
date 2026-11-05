@@ -6,5 +6,6 @@
 
 pub mod cache;
 pub mod field_manager;
+pub mod pck_secret;
 pub mod pcs_client;
 pub mod platform_data;
