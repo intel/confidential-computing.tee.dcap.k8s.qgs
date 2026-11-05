@@ -32,6 +32,12 @@ const INTEL_PCS_TCB_ENDPOINT: &str = "tcb";
 /// FMSPC (Family-Model-Stepping-Platform-CustomSKU) length: 6 bytes as hex.
 pub const FMSPC_HEX_LEN: usize = 12;
 
+/// Connection timeout for Intel PCS API requests.
+const PCS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Overall per-request timeout for Intel PCS API requests.
+const PCS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Request body for Intel PCS API PCK certificates config endpoint.
 #[derive(Serialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -165,6 +171,34 @@ impl PcsPause {
             .filter(|until| *until > now)
             .map(|until| until - now)
     }
+}
+
+/// Builds the shared HTTP client used by all PCS registration modes.
+pub fn build_pcs_http_client() -> Result<reqwest::Client> {
+    // Create HTTP client for Intel PCS API with retry on connection errors and 5xx.
+    // 429 is not retried here: it pauses all PCS requests for the Retry-After delay instead.
+    let retry_policy = reqwest::retry::for_host("api.trustedservices.intel.com")
+        .max_retries_per_request(3)
+        .classify_fn(|req_rep| {
+            let retryable = req_rep.error().is_some()
+                || req_rep
+                    .status()
+                    .map(|s| s.is_server_error())
+                    .unwrap_or(false);
+            if retryable {
+                req_rep.retryable()
+            } else {
+                req_rep.success()
+            }
+        });
+
+    reqwest::Client::builder()
+        .retry(retry_policy)
+        .connect_timeout(PCS_CONNECT_TIMEOUT)
+        .timeout(PCS_REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .context("Failed to build Intel PCS HTTP client")
 }
 
 /// Parses a `Retry-After` header value given in delta-seconds. Missing or unparsable values
