@@ -17,8 +17,8 @@ use kube::{
 };
 use pck_cert_tool::cache::{build_cache_blob, parse_cache_blob};
 use pck_cert_tool::pcs_client::{
-    PckCertsRequest, PcsApiError, PcsPause, PcsRateLimited, fetch_pck_certs, fetch_tcb_info,
-    filter_and_verify_pck_certs, validate_tcb_info, verify_tcb_info,
+    PckCertsRequest, PcsApiError, PcsPause, PcsRateLimited, build_pcs_http_client, fetch_pck_certs,
+    fetch_tcb_info, filter_and_verify_pck_certs, validate_tcb_info, verify_tcb_info,
 };
 use pck_cert_tool::platform_data::{
     QE_ID_HEX_LEN, is_fixed_len_hex, prepare_registration, registration_fingerprint,
@@ -36,12 +36,6 @@ use tracing::{debug, error, info, instrument, warn};
 
 /// Backoff delay between watch error retries to prevent log storms during API server downtime.
 const K8S_API_WATCH_ERROR_BACKOFF: Duration = Duration::from_secs(10);
-
-/// Connection timeout for Intel PCS API requests.
-const PCS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Overall per-request timeout for Intel PCS API requests, bounding slow or stalled responses.
-const PCS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// EFI variable name for SGX platform manifest
 const SGX_PLATFORM_MANIFEST_EFI_VAR: &str =
@@ -657,31 +651,7 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
     let client = Client::try_default().await?;
     let secrets: Api<Secret> = Api::namespaced(client, namespace);
 
-    // Create HTTP client for Intel PCS API with retry on connection errors and 5xx.
-    // 429 is not retried here: it pauses all PCS requests for the Retry-After delay instead.
-    let retry_policy = reqwest::retry::for_host("api.trustedservices.intel.com")
-        .max_retries_per_request(3)
-        .classify_fn(|req_rep| {
-            let retryable = req_rep.error().is_some()
-                || req_rep
-                    .status()
-                    .map(|s| s.is_server_error())
-                    .unwrap_or(false);
-            if retryable {
-                req_rep.retryable()
-            } else {
-                req_rep.success()
-            }
-        });
-    let http_client = reqwest::Client::builder()
-        .retry(retry_policy)
-        // Bound requests so a stalled PCS endpoint can't block registration indefinitely.
-        .connect_timeout(PCS_CONNECT_TIMEOUT)
-        .timeout(PCS_REQUEST_TIMEOUT)
-        // PCS never redirects; don't follow 3xx so requests stay on the pinned host.
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .context("Failed to build HTTP client")?;
+    let http_client = build_pcs_http_client()?;
 
     let ctx = Arc::new(RegistrarContext {
         secrets: secrets.clone(),
