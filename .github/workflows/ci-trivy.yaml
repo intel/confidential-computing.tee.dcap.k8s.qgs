@@ -82,3 +82,49 @@ jobs:
           severity: CRITICAL,HIGH
           trivyignores: .trivyignore.yaml
 
+
+  trivy-scan-charts:
+    name: Scan Helm chart
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      # Online mode renders all of the chart's workloads, including the registrar.
+      TRIVY_HELM_SET: tdxQuoteGenerationService.mode=Online
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Helm
+        uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+
+      # Trivy can't render the chart without its sub-chart.
+      - name: Build dependencies
+        run: helm dependency build charts/intel-tdx-qgs
+
+      - name: Run Trivy SARIF scan (Helm chart)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
+        with:
+          scan-type: config
+          scan-ref: charts/intel-tdx-qgs/
+          exit-code: 0
+          trivyignores: .trivyignore.yaml
+          format: sarif
+          output: trivy-charts.sarif
+
+      - name: Upload SARIF results
+        if: always()
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: trivy-charts.sarif
+          category: trivy-charts
+
+      - name: Enforce Trivy policy (Helm chart)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # 0.36.0
+        with:
+          scan-type: config
+          scan-ref: charts/intel-tdx-qgs/
+          exit-code: 1
+          severity: CRITICAL,HIGH
+          trivyignores: .trivyignore.yaml
