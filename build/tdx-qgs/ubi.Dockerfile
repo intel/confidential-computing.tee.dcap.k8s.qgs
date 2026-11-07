@@ -3,7 +3,7 @@
 
 # Multi-stage Dockerfile for pck-cert-tool and get-platform-info
 # Based on registry.access.redhat.com/ubi10/ubi
-FROM registry.access.redhat.com/ubi10/ubi:latest@sha256:b0a29d36a12733acd937b3f857678539d7ce2dab63bd048cfae8685247b4365c AS builder
+FROM registry.access.redhat.com/ubi10/ubi:latest@sha256:0e8ccad7d35f5fd756f4f2202f018b8d3c3e8bb9af8e627d874239381a00ab41 AS builder
 
 ARG DCAP_TARBALL_SHA256="8819eeb865245a816c0ed335ad3a289ce1024f032af1ed29fe5ec216f3305266"
 
@@ -108,7 +108,7 @@ RUN lib=/usr/lib64 \
 COPY LICENSE /rootfs/licenses/LICENSE
 
 # Final stage — ubi-minimal provides glibc, libstdc++, libgcc
-FROM registry.access.redhat.com/ubi10/ubi-minimal:latest@sha256:c039ecb9ac9db2db85e78b332d66521f6ce401cf812006a27bc7827018eac4a2
+FROM registry.access.redhat.com/ubi10/ubi-minimal:latest@sha256:c3fe95ec9f53a3888c47314eb4d08bde09ebde646a428137b445091afe1daf89
 
 COPY --from=builder /rootfs/ /
 
