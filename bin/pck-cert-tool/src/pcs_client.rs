@@ -4,6 +4,7 @@
 //! Intel PCS (Platform Certification Service) client: HTTP requests and validation of the
 //! responses (PCK certificates, their issuer chain and TCB Info).
 
+use crate::cache::build_cache_blob;
 use crate::platform_data::is_fixed_len_hex;
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -31,6 +32,12 @@ const INTEL_PCS_TCB_ENDPOINT: &str = "tcb";
 
 /// FMSPC (Family-Model-Stepping-Platform-CustomSKU) length: 6 bytes as hex.
 pub const FMSPC_HEX_LEN: usize = 12;
+
+/// Connection timeout for Intel PCS API requests.
+const PCS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Overall per-request timeout for Intel PCS API requests.
+const PCS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Request body for Intel PCS API PCK certificates config endpoint.
 #[derive(Serialize, Debug)]
@@ -167,6 +174,34 @@ impl PcsPause {
     }
 }
 
+/// Builds the shared HTTP client used by all PCS registration modes.
+pub fn build_pcs_http_client() -> Result<reqwest::Client> {
+    // Create HTTP client for Intel PCS API with retry on connection errors and 5xx.
+    // 429 is not retried here: it pauses all PCS requests for the Retry-After delay instead.
+    let retry_policy = reqwest::retry::for_host("api.trustedservices.intel.com")
+        .max_retries_per_request(3)
+        .classify_fn(|req_rep| {
+            let retryable = req_rep.error().is_some()
+                || req_rep
+                    .status()
+                    .map(|s| s.is_server_error())
+                    .unwrap_or(false);
+            if retryable {
+                req_rep.retryable()
+            } else {
+                req_rep.success()
+            }
+        });
+
+    reqwest::Client::builder()
+        .retry(retry_policy)
+        .connect_timeout(PCS_CONNECT_TIMEOUT)
+        .timeout(PCS_REQUEST_TIMEOUT)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .context("Failed to build Intel PCS HTTP client")
+}
+
 /// Parses a `Retry-After` header value given in delta-seconds. Missing or unparsable values
 /// (including the HTTP-date form) fall back to [`DEFAULT_RATE_LIMIT_RETRY_AFTER`]; the result is
 /// capped at [`MAX_RATE_LIMIT_RETRY_AFTER`].
@@ -240,7 +275,7 @@ async fn handle_pcs_api_error(response: reqwest::Response, url: &str) -> anyhow:
 
 /// Fetch PCK Certificates.
 #[instrument(skip(http_client, api_key, request_body))]
-pub async fn fetch_pck_certs(
+async fn fetch_pck_certs(
     http_client: &reqwest::Client,
     api_key: Option<&str>,
     request_body: &PckCertsRequest,
@@ -297,7 +332,7 @@ pub async fn fetch_pck_certs(
 }
 
 /// Validates an FMSPC value before it's used in the TCB Info query and as a label value.
-pub fn validate_fmspc(fmspc: &str) -> Result<()> {
+fn validate_fmspc(fmspc: &str) -> Result<()> {
     anyhow::ensure!(
         is_fixed_len_hex::<FMSPC_HEX_LEN>(fmspc),
         "Invalid SGX-FMSPC: expected a {FMSPC_HEX_LEN}-character hex string, got {} bytes",
@@ -308,7 +343,7 @@ pub fn validate_fmspc(fmspc: &str) -> Result<()> {
 
 /// Fetch SGX TCB Info using the FMSPC.
 #[instrument(skip(http_client), fields(fmspc = %fmspc))]
-pub async fn fetch_tcb_info(http_client: &reqwest::Client, fmspc: &str) -> Result<TcbInfoResponse> {
+async fn fetch_tcb_info(http_client: &reqwest::Client, fmspc: &str) -> Result<TcbInfoResponse> {
     validate_fmspc(fmspc)?;
     info!(fmspc = %fmspc, "Fetching SGX TCB Info");
     let mut tcb_url = PCS_BASE_URL
@@ -526,10 +561,7 @@ fn decode_hex<const N: usize>(s: &str) -> Result<[u8; N]> {
 /// chain is embedded in quotes and verified against the Intel SGX Root CA during quote
 /// verification, but a response with an unrelated chain is only detected at that point.
 #[instrument(skip(pck_certs_json, cert_chain))]
-pub fn filter_and_verify_pck_certs(
-    pck_certs_json: &str,
-    cert_chain: &str,
-) -> Result<(String, String)> {
+fn filter_and_verify_pck_certs(pck_certs_json: &str, cert_chain: &str) -> Result<(String, String)> {
     // Parse the JSON array
     let pck_certs: Vec<PckCertEntry> =
         serde_json::from_str(pck_certs_json).context("Failed to parse PCK certificates JSON")?;
@@ -606,7 +638,7 @@ pub fn filter_and_verify_pck_certs(
 
 /// Validate the TCB Info JSON returned by Intel PCS. Only standard SGX TCB Info (`tcbType` 0)
 /// is supported.
-pub fn validate_tcb_info(tcb_info: &str) -> Result<()> {
+fn validate_tcb_info(tcb_info: &str) -> Result<()> {
     let parsed: TcbInfoDocument =
         serde_json::from_str(tcb_info).context("Failed to parse TCB Info JSON response")?;
 
@@ -659,7 +691,7 @@ fn verify_tcb_info_signature(
 /// Verifies TCB Info returned by Intel PCS: the `TCB-Info-Issuer-Chain` must be a valid
 /// Root CA -> TCB Signing chain rooted at the same Root CA as the PCK certificate issuer chain,
 /// and the TCB Info signature must verify against the TCB Signing certificate.
-pub fn verify_tcb_info(
+fn verify_tcb_info(
     tcb_info_json: &str,
     tcb_issuer_chain: &str,
     pck_issuer_chain: &str,
@@ -682,6 +714,63 @@ pub fn verify_tcb_info(
         &signer_cert.public_key().subject_public_key.data,
         expected_fmspc,
     )
+}
+
+/// Verified PCS response encoded for the local QPL cache.
+#[derive(Debug)]
+pub struct PlatformCache {
+    pub fmspc: String,
+    pub cache_data: Vec<u8>,
+    pub piid: String,
+    pub expiration_time: u64,
+}
+
+/// Fetches and verifies all PCS data needed to build a QPL cache blob.
+pub async fn fetch_platform_cache(
+    http_client: &reqwest::Client,
+    api_key: Option<&str>,
+    request_body: &PckCertsRequest,
+) -> Result<PlatformCache> {
+    // Fetch PCK certificates from Intel PCS API
+    let pck_response = fetch_pck_certs(http_client, api_key, request_body).await?;
+    let fmspc = pck_response.fmspc;
+    let cert_chain = pck_response.cert_chain;
+    let pck_certs_json = pck_response.pck_certs_json;
+
+    // Filter and verify PCK certificates
+    debug!("Filtering and verifying PCK certificates");
+    let (filtered_pck_certs_json, piid) =
+        filter_and_verify_pck_certs(&pck_certs_json, &cert_chain)?;
+
+    let tcb_info_response = fetch_tcb_info(http_client, &fmspc).await?;
+    let tcb_info = tcb_info_response.body;
+
+    // Validate TCB Info structure
+    debug!("Validating TCB Info");
+    validate_tcb_info(&tcb_info)?;
+    debug!("TCB Info validation passed (tcbType=0)");
+
+    debug!("Verifying TCB Info signature");
+    verify_tcb_info(
+        &tcb_info,
+        &tcb_info_response.issuer_chain,
+        &cert_chain,
+        &fmspc,
+    )?;
+
+    let (cache_data, expiration_time) = build_cache_blob(
+        &request_body.cpu_svn,
+        &tcb_info,
+        &cert_chain,
+        &filtered_pck_certs_json,
+    )?;
+
+    Ok(PlatformCache {
+        fmspc,
+        cache_data,
+        piid,
+        expiration_time,
+    })
 }
 
 #[cfg(test)]

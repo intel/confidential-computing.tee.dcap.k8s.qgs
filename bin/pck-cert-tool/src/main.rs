@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{Context, Result, anyhow, bail};
-use base64::Engine;
 use clap::{Parser, Subcommand};
 use futures::StreamExt;
 use k8s_openapi::api::core::v1::Secret;
@@ -15,15 +14,18 @@ use kube::{
         watcher,
     },
 };
-use pck_cert_tool::cache::{build_cache_blob, parse_cache_blob};
+use pck_cert_tool::FIELD_MANAGER;
+use pck_cert_tool::cache::parse_cache_blob;
+use pck_cert_tool::pck_secret::{
+    CreatePckSecretInput, create_pck_secret, pck_secret_is_valid, pck_secret_name,
+};
 use pck_cert_tool::pcs_client::{
-    PckCertsRequest, PcsApiError, PcsPause, PcsRateLimited, fetch_pck_certs, fetch_tcb_info,
-    filter_and_verify_pck_certs, validate_tcb_info, verify_tcb_info,
+    PckCertsRequest, PcsApiError, PcsPause, PcsRateLimited, build_pcs_http_client,
+    fetch_platform_cache,
 };
 use pck_cert_tool::platform_data::{
     QE_ID_HEX_LEN, is_fixed_len_hex, prepare_registration, registration_fingerprint,
 };
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -37,12 +39,6 @@ use tracing::{debug, error, info, instrument, warn};
 /// Backoff delay between watch error retries to prevent log storms during API server downtime.
 const K8S_API_WATCH_ERROR_BACKOFF: Duration = Duration::from_secs(10);
 
-/// Connection timeout for Intel PCS API requests.
-const PCS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Overall per-request timeout for Intel PCS API requests, bounding slow or stalled responses.
-const PCS_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-
 /// EFI variable name for SGX platform manifest
 const SGX_PLATFORM_MANIFEST_EFI_VAR: &str =
     "SgxRegistrationServerRequest-304e0796-d515-4698-ac6e-e76cb1a71c28";
@@ -50,10 +46,6 @@ const SGX_PLATFORM_MANIFEST_EFI_VAR: &str =
 /// Reserved all-zero QE ID, used as the QPL cache file name when the actual ID isn't
 /// guaranteed to be a real QE ID (e.g. a node name in External mode).
 const ZERO_ID: &str = "00000000000000000000000000000000";
-
-/// Server-side apply field manager for all Secrets written by this tool. Keep it stable:
-/// changing it leaves the field ownership in existing Secrets with the old manager.
-const FIELD_MANAGER: &str = "pck-cert-tool";
 
 /// Platform info fields returned by the external platform-info binary:
 /// (cpu_svn, enc_ppid, pce_id, pce_svn, qe_id) — enc_ppid is present in binary output but not used
@@ -486,8 +478,7 @@ async fn watch_certificates(
     output_dir: &Path,
     namespace: &str,
 ) -> Result<()> {
-    // Secret name is <id>-pck
-    let secret_name = format!("{id}-pck");
+    let secret_name = pck_secret_name(id);
     tracing::Span::current().record("secret", &secret_name);
 
     info!("Starting PCK certificate watcher");
@@ -568,41 +559,6 @@ async fn watch_certificates(
     Ok(())
 }
 
-/// Name of the shared secret that maps QE ID → PIID for all registered platforms.
-/// Each entry is patched independently using a per-QE-ID SSA field manager so
-/// concurrent registrar tasks cannot overwrite each other's keys.
-const PIID_INDEX_SECRET_NAME: &str = "piid-index";
-
-/// Patch a single `qe_id → piid` entry into the shared PIID index secret.
-///
-/// Uses a per-`qe_id` SSA field manager so concurrent tasks patching different
-/// platforms into the same secret are always safe. The apply is forced so that an
-/// entry changed by another manager is taken back; it only covers this platform's key.
-#[instrument(skip(secrets))]
-async fn patch_piid_index(secrets: &Api<Secret>, qe_id: &str, piid: &str) -> Result<()> {
-    let field_manager = format!("{FIELD_MANAGER}/{qe_id}");
-    let params = PatchParams::apply(&field_manager).force();
-
-    let patch = serde_json::json!({
-        "apiVersion": "v1",
-        "kind": "Secret",
-        "metadata": {
-            "name": PIID_INDEX_SECRET_NAME,
-        },
-        "type": "Opaque",
-        "data": {
-            qe_id: base64::engine::general_purpose::STANDARD.encode(piid),
-        },
-    });
-
-    secrets
-        .patch(PIID_INDEX_SECRET_NAME, &params, &Patch::Apply(&patch))
-        .await?;
-
-    info!(qe_id = %qe_id, "Updated PIID index");
-    Ok(())
-}
-
 /// Maximum number of platform registrations processed concurrently.
 const MAX_CONCURRENT_REGISTRATIONS: u16 = 4;
 
@@ -657,31 +613,7 @@ async fn register_platforms(api_key: Option<&str>, namespace: &str) -> Result<()
     let client = Client::try_default().await?;
     let secrets: Api<Secret> = Api::namespaced(client, namespace);
 
-    // Create HTTP client for Intel PCS API with retry on connection errors and 5xx.
-    // 429 is not retried here: it pauses all PCS requests for the Retry-After delay instead.
-    let retry_policy = reqwest::retry::for_host("api.trustedservices.intel.com")
-        .max_retries_per_request(3)
-        .classify_fn(|req_rep| {
-            let retryable = req_rep.error().is_some()
-                || req_rep
-                    .status()
-                    .map(|s| s.is_server_error())
-                    .unwrap_or(false);
-            if retryable {
-                req_rep.retryable()
-            } else {
-                req_rep.success()
-            }
-        });
-    let http_client = reqwest::Client::builder()
-        .retry(retry_policy)
-        // Bound requests so a stalled PCS endpoint can't block registration indefinitely.
-        .connect_timeout(PCS_CONNECT_TIMEOUT)
-        .timeout(PCS_REQUEST_TIMEOUT)
-        // PCS never redirects; don't follow 3xx so requests stay on the pinned host.
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .context("Failed to build HTTP client")?;
+    let http_client = build_pcs_http_client()?;
 
     let ctx = Arc::new(RegistrarContext {
         secrets: secrets.clone(),
@@ -731,108 +663,6 @@ fn registration_error_policy(
         .map_or_else(Action::await_change, Action::requeue)
 }
 
-const ANNOTATION_PLATFORM_DATA_FINGERPRINT: &str =
-    "trustedservices.intel.com/platform-data-fingerprint";
-const ANNOTATION_EXPIRES_AT: &str = "trustedservices.intel.com/expires-at";
-
-async fn pck_secret_is_valid(
-    secrets: &Api<Secret>,
-    pck_secret_name: &str,
-    platform_data_fingerprint: &str,
-) -> Result<bool> {
-    let secret = match secrets.get(pck_secret_name).await {
-        Ok(secret) => secret,
-        Err(kube::Error::Api(err)) if err.code == 404 => return Ok(false),
-        Err(err) => {
-            return Err(err)
-                .with_context(|| format!("Failed to read existing PCK secret {pck_secret_name}"));
-        }
-    };
-
-    let Some(annotations) = secret.metadata.annotations.as_ref() else {
-        warn!(pck_secret = %pck_secret_name, "PCK secret has no annotations, refreshing");
-        return Ok(false);
-    };
-
-    let Some(recorded_fingerprint) = annotations
-        .get(ANNOTATION_PLATFORM_DATA_FINGERPRINT)
-        .map(|s| s.as_str())
-    else {
-        warn!(
-            pck_secret = %pck_secret_name,
-            annotation = ANNOTATION_PLATFORM_DATA_FINGERPRINT,
-            "PCK secret is missing platform-data fingerprint annotation, refreshing"
-        );
-        return Ok(false);
-    };
-    if recorded_fingerprint != platform_data_fingerprint {
-        debug!(
-            pck_secret = %pck_secret_name,
-            recorded_fingerprint = %recorded_fingerprint,
-            platform_data_fingerprint = %platform_data_fingerprint,
-            "PCK secret was created from different platform data, refreshing"
-        );
-        return Ok(false);
-    }
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .context("System time error while checking PCK secret expiration")?
-        .as_secs();
-    let Some(expires_at) = annotations.get(ANNOTATION_EXPIRES_AT) else {
-        warn!(
-            pck_secret = %pck_secret_name,
-            annotation = ANNOTATION_EXPIRES_AT,
-            "PCK secret is missing expiration annotation, refreshing"
-        );
-        return Ok(false);
-    };
-    let expires_at = match expires_at.parse::<u64>() {
-        Ok(expires_at) => expires_at,
-        Err(err) => {
-            warn!(
-                pck_secret = %pck_secret_name,
-                annotation = ANNOTATION_EXPIRES_AT,
-                value = %expires_at,
-                error = %err,
-                "PCK secret has invalid expiration annotation, refreshing"
-            );
-            return Ok(false);
-        }
-    };
-
-    if expires_at <= now {
-        debug!(
-            pck_secret = %pck_secret_name,
-            expires_at,
-            now,
-            "PCK secret is expired, refreshing"
-        );
-        return Ok(false);
-    }
-
-    let Some(data) = secret.data.as_ref() else {
-        warn!(pck_secret = %pck_secret_name, "PCK secret has no data, refreshing");
-        return Ok(false);
-    };
-
-    let Some(certificate) = data.get("certificate") else {
-        warn!(pck_secret = %pck_secret_name, "PCK secret has no certificate field, refreshing");
-        return Ok(false);
-    };
-
-    if let Err(err) = parse_cache_blob(&certificate.0) {
-        warn!(
-            pck_secret = %pck_secret_name,
-            error = %err,
-            "PCK secret certificate field is not a valid QPL cache blob, refreshing"
-        );
-        return Ok(false);
-    }
-
-    Ok(true)
-}
-
 #[instrument(skip(secret, ctx), fields(platform_secret = tracing::field::Empty))]
 async fn process_platform_secret(
     secret: Arc<Secret>,
@@ -840,8 +670,6 @@ async fn process_platform_secret(
 ) -> Result<Action, ReconcileError> {
     let secret_name = secret.name_any();
     tracing::Span::current().record("platform_secret", &secret_name);
-
-    let pck_secret_name = format!("{secret_name}-pck");
 
     // Extract platform_manifest and pce_id from the secret
     // The k8s-openapi library automatically base64-decodes .data fields
@@ -857,6 +685,7 @@ async fn process_platform_secret(
         prepare_registration(&secret_name, data).map_err(ReconcileError::permanent)?;
     let platform_data_fingerprint = registration_fingerprint(&request_body);
 
+    let pck_secret_name = pck_secret_name(&secret_name);
     if pck_secret_is_valid(&ctx.secrets, &pck_secret_name, &platform_data_fingerprint)
         .await
         .map_err(|e| ReconcileError::retry(e, K8S_API_WATCH_ERROR_BACKOFF))?
@@ -917,85 +746,24 @@ async fn register_platform(
     request_body: &PckCertsRequest,
     platform_data_fingerprint: &str,
 ) -> Result<()> {
-    let pck_secret_name = format!("{secret_name}-pck");
-
     info!("Requesting PCK certificates from Intel PCS API");
+    let platform_cache = fetch_platform_cache(http_client, api_key, request_body).await?;
 
-    // Fetch PCK certificates from Intel PCS API
-    let pck_response = fetch_pck_certs(http_client, api_key, request_body).await?;
-    let fmspc = pck_response.fmspc;
-    let cert_chain = pck_response.cert_chain;
-    let pck_certs_json = pck_response.pck_certs_json;
-
-    // Filter and verify PCK certificates
-    debug!("Filtering and verifying PCK certificates");
-    let (filtered_pck_certs_json, piid) =
-        filter_and_verify_pck_certs(&pck_certs_json, &cert_chain)?;
-
-    let tcb_info_response = fetch_tcb_info(http_client, &fmspc).await?;
-    let tcb_info = tcb_info_response.body;
-
-    // Validate TCB Info structure
-    debug!("Validating TCB Info");
-    validate_tcb_info(&tcb_info)?;
-    debug!("TCB Info validation passed (tcbType=0)");
-
-    debug!("Verifying TCB Info signature");
-    verify_tcb_info(
-        &tcb_info,
-        &tcb_info_response.issuer_chain,
-        &cert_chain,
-        &fmspc,
-    )?;
-
-    let (cache_data, expiration_time) = build_cache_blob(
-        &request_body.cpu_svn,
-        &tcb_info,
-        &cert_chain,
-        &filtered_pck_certs_json,
-    )?;
-
-    // Create new secret with -pck suffix
-    let mut labels = BTreeMap::new();
-    labels.insert("fmspc".to_string(), fmspc.clone());
-
-    let pck_secret = serde_json::json!({
-        "apiVersion": "v1",
-        "kind": "Secret",
-        "metadata": {
-            "name": pck_secret_name,
-            "namespace": namespace,
-            "labels": labels,
-            "annotations": {
-                ANNOTATION_PLATFORM_DATA_FINGERPRINT: platform_data_fingerprint,
-                ANNOTATION_EXPIRES_AT: expiration_time.to_string(),
-            },
+    // Create secret
+    create_pck_secret(
+        secrets,
+        CreatePckSecretInput {
+            qe_id: secret_name.to_string(),
+            fmspc: platform_cache.fmspc,
+            cache_data: platform_cache.cache_data,
+            piid: platform_cache.piid,
+            expiration_time: platform_cache.expiration_time,
+            namespace: namespace.to_string(),
+            platform_data_fingerprint: platform_data_fingerprint.to_string(),
+            pck_secret_name: pck_secret_name(secret_name),
         },
-        "type": "Opaque",
-        "data": {
-            "certificate": base64::engine::general_purpose::STANDARD.encode(&cache_data),
-        },
-    });
-
-    // Create or update the secret using server-side apply. The certificates just fetched from
-    // Intel PCS are authoritative, so take over fields that other managers changed instead of
-    // failing with a conflict.
-    let params = PatchParams::apply(FIELD_MANAGER).force();
-
-    secrets
-        .patch(&pck_secret_name, &params, &Patch::Apply(&pck_secret))
-        .await?;
-
-    // Update the PIID index with this platform's QE ID → PIID mapping.
-    // qe_id is derived from the platform-data secret name (which is the qe_id itself).
-    patch_piid_index(secrets, secret_name, &piid).await?;
-
-    info!(
-        pck_secret = %pck_secret_name,
-        namespace = %namespace,
-        fmspc = %fmspc,
-        "Created/updated secret with PCK certificates"
-    );
+    )
+    .await?;
 
     Ok(())
 }
