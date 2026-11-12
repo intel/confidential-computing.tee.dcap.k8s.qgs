@@ -17,7 +17,7 @@ use kube::{
 use pck_cert_tool::FIELD_MANAGER;
 use pck_cert_tool::cache::parse_cache_blob;
 use pck_cert_tool::pck_secret::{
-    CreatePckSecretInput, create_pck_secret, pck_secret_is_valid, pck_secret_name,
+    CreatePckSecretInput, create_pck_secret, patch_piid_index, pck_secret_is_valid, pck_secret_name,
 };
 use pck_cert_tool::pcs_client::{
     PckCertsRequest, PcsApiError, PcsPause, PcsRateLimited, build_pcs_http_client,
@@ -749,14 +749,12 @@ async fn register_platform(
     info!("Requesting PCK certificates from Intel PCS API");
     let platform_cache = fetch_platform_cache(http_client, api_key, request_body).await?;
 
-    // Create secret
+    // Write the PCK certificate secret for this platform.
     create_pck_secret(
         secrets,
         CreatePckSecretInput {
-            qe_id: secret_name.to_string(),
             fmspc: platform_cache.fmspc,
             cache_data: platform_cache.cache_data,
-            piid: platform_cache.piid,
             expiration_time: platform_cache.expiration_time,
             namespace: namespace.to_string(),
             platform_data_fingerprint: platform_data_fingerprint.to_string(),
@@ -764,6 +762,10 @@ async fn register_platform(
         },
     )
     .await?;
+
+    // Record the verified Platform Composition Manifest in the shared PIID index secret,
+    // keyed by the QE ID (which is the platform-data secret name).
+    patch_piid_index(secrets, secret_name, &platform_cache.pcm).await?;
 
     Ok(())
 }
