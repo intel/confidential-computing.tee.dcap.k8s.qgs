@@ -15,6 +15,7 @@ use kube::{
         watcher,
     },
 };
+use pck_cert_tool::FIELD_MANAGER;
 use pck_cert_tool::cache::{build_cache_blob, parse_cache_blob};
 use pck_cert_tool::pcs_client::{
     PckCertsRequest, PcsApiError, PcsPause, PcsRateLimited, build_pcs_http_client, fetch_pck_certs,
