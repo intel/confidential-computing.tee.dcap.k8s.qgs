@@ -245,13 +245,15 @@ rules:
 | **register** | Watches platform-data, creates PCK certs | get, list, watch, create, patch |
 | **get-certificates** | Reads PCK certs, watches updates | get, watch |
 
-The QGS DaemonSet and the registrar share the `intel-tdx-dcap-qgs` ServiceAccount. Its Role grants
-`get`, `list`, `watch`, `create`, and `patch` on all Secrets in the namespace, because the
-platform-data and `<id>-pck` Secret names are only known at runtime. Pods running with this
-ServiceAccount can therefore access every Secret in the namespace, including Secrets of other
-nodes and any Secret not created by the operator. In `Online` mode this includes the Intel PCS
-API key Secret. To keep the key out of reach of the QGS pods, use `Offline` mode or run `Online`
-mode without an API key.
+The QGS DaemonSet runs under the `intel-tdx-dcap-qgs` ServiceAccount; in `Online` mode the
+registrar runs under its own `intel-tdx-dcap-registrar` ServiceAccount so its requests can be
+told apart from the QGS pods'. Both accounts are pre-created (the registration mode is only known
+once a CR is applied) and bound to the same Role, which grants `get`, `list`, `watch`, `create`,
+and `patch` on all Secrets in the namespace, because the platform-data and `<id>-pck` Secret
+names are only known at runtime. Pods running with either ServiceAccount can therefore access
+every Secret in the namespace, including Secrets of other nodes and any Secret not created by the
+operator. In `Online` mode this includes the Intel PCS API key Secret. To keep the key out of
+reach of the QGS pods, use `Offline` mode or run `Online` mode without an API key.
 
 Use a namespace dedicated to the operator, `intel-dcap-operator-system` by default or the
 namespace selected at OLM install time:
@@ -268,6 +270,8 @@ Check which identities can read Secrets in the namespace:
 DCAP_NAMESPACE=intel-dcap-operator-system
 kubectl auth can-i list secrets --namespace "$DCAP_NAMESPACE" \
   --as=system:serviceaccount:"$DCAP_NAMESPACE":intel-tdx-dcap-qgs
+kubectl auth can-i list secrets --namespace "$DCAP_NAMESPACE" \
+  --as=system:serviceaccount:"$DCAP_NAMESPACE":intel-tdx-dcap-registrar
 kubectl get rolebindings --namespace "$DCAP_NAMESPACE" -o wide
 ```
 
@@ -292,7 +296,8 @@ cargo test -p operator
 ## Environment Variables
 
 - `OPERATOR_NAMESPACE` - Namespace where the operator creates resources (set via Downward API `fieldRef`; defaults to `default` if unset)
-- `QGS_SERVICE_ACCOUNT` - Name of the ServiceAccount used by QGS/registrar pods the operator creates (set by kustomize from the `qgs` ServiceAccount name; defaults to `intel-tdx-dcap-qgs` if unset)
+- `QGS_SERVICE_ACCOUNT` - Name of the ServiceAccount used by the QGS DaemonSet pods the operator creates (set by kustomize from the `qgs` ServiceAccount name; defaults to `intel-tdx-dcap-qgs` if unset)
+- `REGISTRAR_SERVICE_ACCOUNT` - Name of the ServiceAccount used by the registrar Deployment the operator creates in `Online` mode (set by kustomize from the `registrar` ServiceAccount name; defaults to `intel-tdx-dcap-registrar` if unset)
 - `RELATED_IMAGE_QGS` - Overrides the image used for all DaemonSet containers (platform-registration initContainer, pck-certs-watcher sidecar, tdx-qgs). Follows the OLM `RELATED_IMAGE_*` convention so operator-sdk includes it in `relatedImages` when generating the bundle
 - `HTTPS_PROXY` / `https_proxy` - If set on the operator process, propagated into the registrar Deployment's container env so it can reach Intel PCS through a proxy
 

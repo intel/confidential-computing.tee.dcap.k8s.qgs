@@ -1,0 +1,58 @@
+{{- if and .Values.tdxQuoteGenerationService.enabled .Values.tdxQuoteGenerationService.nodeAdmissionPolicy.enabled }}
+{{- $name := printf "%s-%s-platform-data" .Release.Namespace (include "intel-tdx-qgs.fullname" .) }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "intel-tdx-qgs.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: [""]
+        apiVersions: ["v1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["secrets"]
+  matchConditions:
+    - name: qgs-service-account
+      expression: >-
+        request.userInfo.username ==
+        'system:serviceaccount:{{ .Release.Namespace }}:intel-tdx-dcap-qgs'
+  variables:
+    - name: node
+      expression: >-
+        request.userInfo.extra[?'authentication.kubernetes.io/node-name'].orValue([''])[0]
+  validations:
+    - expression: variables.node != ''
+      message: the request has no node name, a node-bound service account token is required
+    - expression: >-
+        object.metadata.?labels[?'type'].orValue('') == 'platform-data'
+      message: QGS pods may only write platform-data secrets
+    - expression: >-
+        object.metadata.?labels[?'trustedservices.intel.com/node'].orValue('') == variables.node
+      messageExpression: >-
+        'platform-data secrets must be labeled with trustedservices.intel.com/node=' + variables.node
+    # An existing secret must be this node's. platform-data secrets without the node label were
+    # written before it was introduced, let the node claim them.
+    - expression: >-
+        oldObject == null ||
+        oldObject.metadata.?labels[?'trustedservices.intel.com/node'].orValue('') == variables.node ||
+        !oldObject.metadata.?labels[?'trustedservices.intel.com/node'].hasValue() &&
+        oldObject.metadata.?labels[?'type'].orValue('') == 'platform-data'
+      message: only this node's platform-data secrets can be modified
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "intel-tdx-qgs.labels" . | nindent 4 }}
+spec:
+  policyName: {{ $name }}
+  validationActions: [Deny]
+  matchResources:
+    namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: {{ .Release.Namespace }}
+{{- end }}

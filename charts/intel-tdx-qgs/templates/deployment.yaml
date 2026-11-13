@@ -20,7 +20,7 @@ spec:
         app.kubernetes.io/component: registrar
         app: intel-tdx-registrar
     spec:
-      serviceAccountName: intel-tdx-dcap-qgs
+      serviceAccountName: intel-tdx-dcap-registrar
       securityContext:
         seccompProfile:
           type: RuntimeDefault
