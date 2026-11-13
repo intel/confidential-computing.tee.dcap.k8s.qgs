@@ -4,9 +4,9 @@
 PROJECT_NAME := intel-tdx-dcap-operator
 
 # Bundle settings
-VERSION ?= 0.0.1
-CHANNELS ?= alpha
-DEFAULT_CHANNEL ?= alpha
+VERSION ?= 0.27.0
+CHANNELS ?= stable
+DEFAULT_CHANNEL ?= stable
 BUNDLE_METADATA_OPTS ?= --channels=$(CHANNELS) --default-channel=$(DEFAULT_CHANNEL)
 KUSTOMIZE_DIR := deployment/manifests
 BUNDLE_DIR := deployment/bundle
@@ -19,7 +19,7 @@ generate:
 
 # Image settings. Override with pinned registry/digest values for releases, e.g.:
 #   make bundle VERSION=0.1.0 REGISTRY=ghcr.io/intel
-REGISTRY ?= example.com
+REGISTRY ?= registry.connect.redhat.com/intel
 OPERATOR_IMAGE ?= $(REGISTRY)/intel-tdx-dcap-operator:v$(VERSION)
 QGS_IMAGE ?= $(REGISTRY)/intel-tdx-qgs:v$(VERSION)
 
