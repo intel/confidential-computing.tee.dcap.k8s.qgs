@@ -7,6 +7,7 @@
 pub mod cache;
 pub mod pck_secret;
 pub mod pcs_client;
+mod pcs_response_validation;
 pub mod platform_data;
 
 /// Server-side apply field manager for all Secrets written by this tool. Keep it stable:
