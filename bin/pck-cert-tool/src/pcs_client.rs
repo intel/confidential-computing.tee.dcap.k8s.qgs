@@ -20,8 +20,13 @@ use x509_parser::x509::SubjectPublicKeyInfo;
 /// Intel PCS API base URL (with trailing slash for proper join behavior).
 const INTEL_PCS_API_BASE_URL: &str = "https://api.trustedservices.intel.com/sgx/certification/v4/";
 
-static PCS_BASE_URL: LazyLock<Url> =
+pub static PCS_BASE_URL: LazyLock<Url> =
     LazyLock::new(|| Url::parse(INTEL_PCS_API_BASE_URL).expect("Invalid Intel PCS API base URL"));
+
+pub const PCK_CERTIFICATE_ISSUER_CHAIN: &str = "SGX-PCK-Certificate-Issuer-Chain";
+pub const PCK_CRL_ISSUER_CHAIN: &str = "SGX-PCK-CRL-Issuer-Chain";
+pub const TCB_INFO_ISSUER_CHAIN: &str = "TCB-Info-Issuer-Chain";
+pub const ENCLAVE_IDENTITY_ISSUER_CHAIN: &str = "SGX-Enclave-Identity-Issuer-Chain";
 
 /// Intel PCS API endpoint for PCK certificates with CPU SVN.
 const INTEL_PCS_PCKCERTS_ENDPOINT: &str = "pckcerts/config";
@@ -313,9 +318,9 @@ async fn fetch_pck_certs(
 
     let cert_chain = response
         .headers()
-        .get("SGX-PCK-Certificate-Issuer-Chain")
+        .get(PCK_CERTIFICATE_ISSUER_CHAIN)
         .and_then(|v| v.to_str().ok())
-        .context("Missing SGX-PCK-Certificate-Issuer-Chain header")?
+        .context(format!("Missing {} header", PCK_CERTIFICATE_ISSUER_CHAIN))?
         .to_string();
 
     info!(fmspc = %fmspc, "Received PCK certificates");
@@ -427,7 +432,7 @@ async fn fetch_tcb_info(http_client: &reqwest::Client, fmspc: &str) -> Result<Tc
 
     let issuer_chain = response
         .headers()
-        .get("TCB-Info-Issuer-Chain")
+        .get(TCB_INFO_ISSUER_CHAIN)
         .and_then(|v| v.to_str().ok())
         .context("Missing TCB-Info-Issuer-Chain header in TCB info response")?
         .to_string();
@@ -494,7 +499,7 @@ fn verify_certificate(cert_pem: &str, issuer_spki: &SubjectPublicKeyInfo<'_>) ->
 /// Decodes a URL-encoded PEM issuer chain as returned in Intel PCS response headers and
 /// validates its structure: exactly two certificates, one self-signed Root CA and one
 /// certificate signed by it. Returns `(root_der, issuer_der)`.
-fn decode_and_validate_issuer_chain(chain: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+pub(crate) fn decode_and_validate_issuer_chain(chain: &str) -> Result<(Vec<u8>, Vec<u8>)> {
     let decoded_chain = urlencoding::decode(chain).context("Failed to decode certificate chain")?;
 
     let mut chain_der: Vec<Vec<u8>> = Pem::iter_from_buffer(decoded_chain.as_bytes())
@@ -715,7 +720,7 @@ fn verify_tcb_info_signature(
 /// Verifies TCB Info returned by Intel PCS: the `TCB-Info-Issuer-Chain` must be a valid
 /// Root CA -> TCB Signing chain rooted at the same Root CA as the PCK certificate issuer chain,
 /// and the TCB Info signature must verify against the TCB Signing certificate.
-fn verify_tcb_info(
+pub(crate) fn verify_tcb_info(
     tcb_info_json: &str,
     tcb_issuer_chain: &str,
     pck_issuer_chain: &str,
@@ -738,6 +743,42 @@ fn verify_tcb_info(
         &signer_cert.public_key().subject_public_key.data,
         expected_fmspc,
     )
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct SignedEnclaveIdentity<'a> {
+    #[serde(borrow)]
+    enclave_identity: &'a serde_json::value::RawValue,
+    signature: &'a str,
+}
+
+pub(crate) fn verify_enclave_identity(
+    identity_json: &str,
+    identity_issuer_chain: &str,
+    pck_issuer_chain: &str,
+) -> Result<()> {
+    let signed: SignedEnclaveIdentity<'_> =
+        serde_json::from_str(identity_json).context("Failed to parse signed enclave identity")?;
+    let signature = decode_hex::<ECDSA_P256_SIGNATURE_LEN>(signed.signature)
+        .context("Invalid enclave identity signature encoding")?;
+
+    let (identity_root_der, signer_der) = decode_and_validate_issuer_chain(identity_issuer_chain)
+        .context("Invalid enclave identity issuer chain")?;
+    let (pck_root_der, _) = decode_and_validate_issuer_chain(pck_issuer_chain)
+        .context("Invalid PCK certificate issuer chain")?;
+    if identity_root_der != pck_root_der {
+        bail!("Enclave identity issuer chain Root CA does not match PCK issuer chain Root CA");
+    }
+
+    let (_, signer_cert) = parse_x509_certificate(&signer_der)
+        .map_err(|e| anyhow!("Failed to parse enclave identity signing certificate: {e}"))?;
+    ring::signature::UnparsedPublicKey::new(
+        &ring::signature::ECDSA_P256_SHA256_FIXED,
+        &signer_cert.public_key().subject_public_key.data,
+    )
+    .verify(signed.enclave_identity.get().as_bytes(), &signature)
+    .map_err(|_| anyhow!("Enclave identity signature verification failed"))
 }
 
 /// Verified PCS response encoded for the local QPL cache.

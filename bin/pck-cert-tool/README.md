@@ -92,6 +92,36 @@ The binary will be available at `target/release/pck-cert-tool`
 
 ## Usage
 
+### fetch command
+
+Fetch the public Intel PCS v4 collateral needed to provision Trustee in an offline environment.
+The command retrieves SGX and, when available, TDX TCB Info for each selected FMSPC, the QE,
+TDQE, and QVE identities, processor and platform PCK CRLs, the Intel SGX Root CA CRL, and all
+associated issuer chains.
+PCS signatures, certificate chains, and CRL signatures are verified before the output file is written.
+
+```bash
+./pck-cert-tool fetch \
+  --fmspc 00A06D080000 \
+  --fmspc 70A06D070000 \
+  --output_file platform_collaterals.json
+```
+
+`--fmspc` may be repeated or supplied as a comma-separated list.
+Values must be exactly 12 hexadecimal characters and are normalized to uppercase. If `--fmspc`
+is omitted, the command retrieves all available FMSPCs from PCS using `platform=all`.
+The hyphenated output-file alias is also accepted:
+
+```bash
+./pck-cert-tool fetch \
+  --fmspc 00A06D080000,70A06D070000 \
+  --output-file platform_collaterals.json
+```
+
+The generated JSON uses the Trustee-compatible `platforms`/`collaterals` envelope.
+
+**Note:** Because this mode retrieves only public collateral, it does not require an Intel PCS API subscription key or platform registration input.
+
 ### get-platforms command
 
 Get platform data and create Kubernetes secrets. The secret name is automatically derived from the QE ID.
