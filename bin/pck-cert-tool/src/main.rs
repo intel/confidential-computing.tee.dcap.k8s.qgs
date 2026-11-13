@@ -16,6 +16,7 @@ use kube::{
 };
 use pck_cert_tool::FIELD_MANAGER;
 use pck_cert_tool::cache::parse_cache_blob;
+use pck_cert_tool::collateral::{fetch_collateral, parse_fmspc};
 use pck_cert_tool::pck_secret::{
     create_pck_secret, patch_piid_index, pck_secret_is_valid, pck_secret_name,
 };
@@ -70,6 +71,8 @@ enum Commands {
     Register(RegisterArgs),
     /// Readiness/liveness probe helpers (exit 0 = ok, 1 = not ok)
     Probe(ProbeArgs),
+    /// Fetch public Intel PCS collateral for Trustee offline provisioning
+    Fetch(FetchCollateralArgs),
 }
 
 #[derive(Parser, Debug)]
@@ -146,6 +149,27 @@ struct RegisterArgs {
     /// Output YAML containing directly applicable Kubernetes Secrets; requires --input-file
     #[arg(short = 'o', long, requires = "input_file")]
     output_file: Option<PathBuf>,
+}
+
+#[derive(Parser, Debug)]
+pub struct FetchCollateralArgs {
+    /// FMSPC to retrieve. Repeat or use comma-separated values; omit to retrieve all FMSPCs.
+    #[arg(
+        long,
+        value_parser = parse_fmspc,
+        value_delimiter = ',',
+        num_args = 1..
+    )]
+    pub fmspc: Vec<String>,
+
+    /// Trustee-compatible collateral JSON output file.
+    #[arg(
+        short = 'o',
+        long = "output_file",
+        visible_alias = "output-file",
+        default_value = "platform_collaterals.json"
+    )]
+    pub output_file: PathBuf,
 }
 
 #[derive(Parser, Debug)]
@@ -850,6 +874,9 @@ async fn main() -> Result<()> {
                 }
             }
         },
+        Commands::Fetch(fetch_args) => {
+            fetch_collateral(fetch_args.fmspc, fetch_args.output_file).await?;
+        }
     }
 
     Ok(())
