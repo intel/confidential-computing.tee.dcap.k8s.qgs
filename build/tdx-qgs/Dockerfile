@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Named early so gpl-sources can read its dpkg database for exact versions.
-FROM gcr.io/distroless/cc-debian13@sha256:e1f5543d45a2cd7c02a5b43dda5f0ff30729b4832113759d01ed39b0b152cddb AS final-base
+FROM gcr.io/distroless/cc-debian13@sha256:809d04afa1be033c441f76bb0051878c342fb76d0ea236bc6dc94b655fa0fbd6 AS final-base
 
 # Bundle source for the LGPL shared libs above (gcc-14, glibc).
-FROM rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581 AS gpl-sources
+FROM rust:1.99.1-slim-trixie@sha256:f6c4a35d21dbb3c89d7a8d056c193e94fc09037f2b58dd858b09c39a47dd02d7 AS gpl-sources
 WORKDIR /gpl-sources
 # Derive package=version from the pinned base image's own dpkg database
 # instead of hardcoding, so it never drifts from the pinned digest.
@@ -31,7 +31,7 @@ RUN apt-get update \
              done; \
        done
 
-FROM rust:1.99.0-slim-trixie@sha256:2752b332db73fdbb7dc576f06c82ed1f312005784ef913d7e04a28f5f55dc581 AS builder
+FROM rust:1.99.1-slim-trixie@sha256:f6c4a35d21dbb3c89d7a8d056c193e94fc09037f2b58dd858b09c39a47dd02d7 AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
