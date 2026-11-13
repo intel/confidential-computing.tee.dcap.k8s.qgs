@@ -118,34 +118,63 @@ pck-cert-tool get-platforms -p /path/to/get-platform-info -e /run/efivars -n my-
 
 ### register command
 
-Watch for platform-data secrets and automatically register them with Intel PCS.
+Register platforms with Intel PCS using either Kubernetes platform-data secrets or an exported platform request JSON file.
 
-**Note:** You need an Intel PCS API key (subscription key) to use this command.
+**Note:** Supply the Intel PCS API subscription key with `--api-key`/`-a` or the `INTEL_PCS_API_KEY` environment variable.
+
+#### Kubernetes watcher mode
+
+Without file arguments, `register` watches platform-data secrets and creates Kubernetes PCK certificate secrets:
 
 Basic usage:
 
 ```bash
-./target/release/pck-cert-tool register --api-key YOUR_API_KEY
+./target/release/pck-cert-tool register --api-key "YOUR_API_KEY"
 ```
 
-Specify a namespace:
+**Note:** Default namespace is `intel-dcap-operator-system`. Use `--namespace`/`-n` to specify a different namespace.
 
-```bash
-./target/release/pck-cert-tool register --api-key YOUR_API_KEY --namespace my-namespace
-```
-
-Short options:
-
-```bash
-./target/release/pck-cert-tool register -a YOUR_API_KEY -n my-namespace
-```
-
-The register command will:
+In watcher mode, the command will:
 1. Watch for secrets with label `type=platform-data`
 2. Extract platform manifest, PCE ID, and CPU SVN from each secret
 3. Send a POST request to Intel PCS API `/pckcerts/config` endpoint with platform-specific CPU SVN to retrieve matching PCK certificates
 4. Create a new secret named `<original_name>-pck` with the certificate data
 5. Label the new secret with `fmspc=<value>` from the API response
+
+#### File mode
+
+Supplying both `--input-file`/`-i` and `--output-file`/`-o` enables finite file mode:
+
+```bash
+./target/release/pck-cert-tool register \
+  --input-file platforms.json \
+  --output-file pck-secrets.yaml \
+  --namespace intel-dcap-operator-system \
+  --api-key "YOUR_API_KEY"
+```
+
+Short options:
+
+```bash
+./target/release/pck-cert-tool register -i platforms.json -o pck-secrets.yaml \
+  -n intel-dcap-operator-system -a "YOUR_API_KEY"
+```
+
+In file mode, the command will:
+1. Read platform registration requests from the exported JSON file
+2. Send a POST request to Intel PCS API `/pckcerts/config` endpoint with platform-specific CPU SVN to retrieve matching PCK certificates
+3. Generate `<qe-id>-pck` Secrets with the required labels, annotations, and cache data
+4. Generate the shared `piid-index` Secret
+5. Write all Secrets to one directly applicable YAML file
+6. Exit after all entries have been processed
+
+Apply the generated Secrets on the disconnected cluster:
+
+```bash
+cat pck-secrets.yaml | kubectl apply -f -
+```
+
+**Note:** `--input-file` and `--output-file` must always be provided together.
 
 ### get-certificates command
 
@@ -350,6 +379,39 @@ The register service will:
 - Create `a1b2c3d4e5f6-pck` secret with base64-encoded cache file
 - Continue watching for more platform-data secrets
 
+### export-requests example
+
+Running:
+
+```bash
+./target/release/pck-cert-tool export-requests -o platform_requests.json
+```
+
+The command exports platform registration data from Kubernetes secrets to `platform_requests.json` 
+for transfer to a system with Intel PCS access.
+
+### register file-mode example
+
+Running:
+
+```bash
+./target/release/pck-cert-tool register -i platform_requests.json -o pck-secrets.yaml \
+  -n intel-dcap-operator-system \
+  -a YOUR_INTEL_API_KEY
+```
+
+The register command will:
+- Read platform registration requests from `platforms.json`
+- Retrieve and verify matching PCK certificates and SGX TCB Info from Intel PCS
+- Write directly applicable PCK and PIID index Secrets to `pck-secrets.yaml`
+- Exit after all platform requests have been processed
+
+Apply the generated Secrets on the disconnected cluster:
+
+```bash
+cat pck-secrets.yaml | oc apply -f -
+```
+
 ### get-certificates example
 
 Running:
@@ -383,3 +445,32 @@ Decode specific fields:
 kubectl get secret a1b2c3d4e5f6 -n default -o jsonpath='{.data.qe_id}' | base64 -d
 kubectl get secret a1b2c3d4e5f6 -n default -o jsonpath='{.data.platform_manifest}' | base64 -d
 ```
+
+## Air-gapped flow
+ 
+1. On a node **without access to PCS** (e.g., air-gapped cluster), run `export-requests` 
+   to export platform registration requests to a JSON file (`platform_requests.json`):
+    ```bash
+    ./pck-cert-tool export-requests
+    ```
+
+2. On a node with Intel PCS access build tool from sources or run (to extract the binary from the container image):
+    ```bash
+    PCK_CERT_TOOL_IMAGE=docker.io/intel/intel-tdx-qgs:latest
+    cid=$(docker create $PCK_CERT_TOOL_IMAGE) && \
+      docker cp "$cid":/usr/local/bin/pck-cert-tool ./pck-cert-tool && \
+      docker rm "$cid" && \
+      chmod +x ./pck-cert-tool
+    ``` 
+  
+3. Copy the exported JSON file to a system with Intel PCS access and run `register` in file mode 
+   to generate the PCK certificate secrets YAML file (`pck-secrets.yaml`):
+    ```bash
+    ./pck-cert-tool register -i platform_requests.json -o pck-secrets.yaml \
+    -n intel-dcap-operator-system -a <PCS_API_KEY>
+    ```
+
+4. Copy the generated `pck-secrets.yaml` back to the air-gapped cluster and apply it:
+    ```bash
+    cat pck-secrets.yaml | kubectl apply -f -
+    ```

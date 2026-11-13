@@ -152,7 +152,7 @@ pub async fn create_pck_secret(
 
     // Update the PIID index with this platform's QE ID → PIID mapping.
     // qe_id is derived from the platform-data secret name (which is the qe_id itself).
-    patch_piid_index(secrets, &input.qe_id, &input.piid).await?;
+    patch_piid_index(secrets, &input.namespace, &input.qe_id, &input.piid).await?;
 
     info!(
         pck_secret = %input.pck_secret_name,
@@ -164,7 +164,7 @@ pub async fn create_pck_secret(
     Ok(())
 }
 
-fn pck_secret_manifest(input: &CreatePckSecretInput) -> serde_json::Value {
+pub fn pck_secret_manifest(input: &CreatePckSecretInput) -> serde_json::Value {
     let mut labels = BTreeMap::new();
     labels.insert("fmspc".to_string(), input.fmspc.clone());
 
@@ -193,11 +193,17 @@ fn pck_secret_manifest(input: &CreatePckSecretInput) -> serde_json::Value {
 /// platforms into the same secret are always safe. The apply is forced so that an
 /// entry changed by another manager is taken back; it only covers this platform's key.
 #[instrument(skip(secrets))]
-async fn patch_piid_index(secrets: &Api<Secret>, qe_id: &str, piid: &str) -> anyhow::Result<()> {
+async fn patch_piid_index(
+    secrets: &Api<Secret>,
+    namespace: &str,
+    qe_id: &str,
+    piid: &str,
+) -> anyhow::Result<()> {
     // Per-QE-ID manager so concurrent tasks only own their own piid-index key.
     let field_manager = format!("{FIELD_MANAGER}/{qe_id}");
     let params = PatchParams::apply(&field_manager).force();
-    let patch = piid_index_patch(qe_id, piid);
+    let entries = BTreeMap::from([(qe_id.to_string(), piid.to_string())]);
+    let patch = piid_index_secret_manifest(namespace, &entries);
 
     secrets
         .patch(PIID_INDEX_SECRET_NAME, &params, &Patch::Apply(&patch))
@@ -207,17 +213,29 @@ async fn patch_piid_index(secrets: &Api<Secret>, qe_id: &str, piid: &str) -> any
     Ok(())
 }
 
-fn piid_index_patch(qe_id: &str, piid: &str) -> serde_json::Value {
+pub fn piid_index_secret_manifest(
+    namespace: &str,
+    entries: &BTreeMap<String, String>,
+) -> serde_json::Value {
+    let data: BTreeMap<_, _> = entries
+        .iter()
+        .map(|(qe_id, piid)| {
+            (
+                qe_id,
+                base64::engine::general_purpose::STANDARD.encode(piid),
+            )
+        })
+        .collect();
+
     serde_json::json!({
         "apiVersion": "v1",
         "kind": "Secret",
         "metadata": {
             "name": PIID_INDEX_SECRET_NAME,
+            "namespace": namespace,
         },
         "type": "Opaque",
-        "data": {
-            qe_id: base64::engine::general_purpose::STANDARD.encode(piid),
-        },
+        "data": data,
     })
 }
 
@@ -261,16 +279,18 @@ mod tests {
     }
 
     #[test]
-    fn piid_patch_uses_qe_id_key_and_encoded_piid() {
+    fn piid_manifest_uses_qe_id_key_and_encoded_piid() {
         let input = input();
-        let patch = piid_index_patch(&input.qe_id, &input.piid);
+        let entries = BTreeMap::from([(input.qe_id.clone(), input.piid.clone())]);
+        let manifest = piid_index_secret_manifest(&input.namespace, &entries);
 
-        assert_eq!(patch["apiVersion"], "v1");
-        assert_eq!(patch["kind"], "Secret");
-        assert_eq!(patch["metadata"]["name"], PIID_INDEX_SECRET_NAME);
-        assert_eq!(patch["type"], "Opaque");
-        assert_eq!(patch["data"][&input.qe_id], "cGlpZC12YWx1ZQ==");
-        assert_eq!(patch["data"].as_object().map(|data| data.len()), Some(1));
+        assert_eq!(manifest["apiVersion"], "v1");
+        assert_eq!(manifest["kind"], "Secret");
+        assert_eq!(manifest["metadata"]["name"], PIID_INDEX_SECRET_NAME);
+        assert_eq!(manifest["metadata"]["namespace"], input.namespace);
+        assert_eq!(manifest["type"], "Opaque");
+        assert_eq!(manifest["data"][&input.qe_id], "cGlpZC12YWx1ZQ==");
+        assert_eq!(manifest["data"].as_object().map(|data| data.len()), Some(1));
     }
 
     #[test]
