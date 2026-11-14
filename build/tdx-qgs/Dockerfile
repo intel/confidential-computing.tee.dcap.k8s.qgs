@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Named early so gpl-sources can read its dpkg database for exact versions.
-FROM gcr.io/distroless/cc-debian13@sha256:e1f5543d45a2cd7c02a5b43dda5f0ff30729b4832113759d01ed39b0b152cddb AS final-base
+FROM gcr.io/distroless/cc-debian13@sha256:809d04afa1be033c441f76bb0051878c342fb76d0ea236bc6dc94b655fa0fbd6 AS final-base
 
 # Bundle source for the LGPL shared libs above (gcc-14, glibc).
 FROM rust:1.100.0-slim-trixie@sha256:e9d95b74296f7126a83ae3d041aeaba1ff4c478f13abc5cc034fcf7c131c3d4a AS gpl-sources
