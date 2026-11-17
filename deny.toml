@@ -4,6 +4,13 @@ targets = [
     "x86_64-unknown-linux-musl"
 ]
 
+[advisories]
+ignore = [
+    # chrono is unmaintained but still pulled in transitively via
+    # kube "cel" feature -> kube-cel -> cel. Remove once upstream drops it.
+    { id = "RUSTSEC-2026-0543", reason = "transitive via kube-cel/cel; no direct use" },
+]
+
 [licenses]
 # List of explicitly allowed licenses
 # See https://spdx.org/licenses/ for list of possible licenses

@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
 use futures::StreamExt;
+use jiff::Timestamp;
 use k8s_openapi::api::apps::v1::{DaemonSet, Deployment};
 use k8s_openapi::api::core::v1::{EnvVar, EnvVarSource, SecretKeySelector};
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::OwnerReference;
@@ -250,7 +250,7 @@ async fn reconcile_resource(
             "status": if is_ready { "True" } else { "False" },
             "reason": if is_ready { "ServicesReady" } else { "ServicesNotReady" },
             "message": message,
-            "lastTransitionTime": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+            "lastTransitionTime": format!("{:.9}", Timestamp::now()),
             "observedGeneration": resource.metadata.generation,
         });
 
@@ -615,7 +615,7 @@ async fn update_status(
     message: &str,
     observed_generation: Option<i64>,
 ) -> Result<()> {
-    let now = Utc::now().to_rfc3339();
+    let now = Timestamp::now().to_string();
     let status_patch = json!({
         "status": {
             "conditions": [{

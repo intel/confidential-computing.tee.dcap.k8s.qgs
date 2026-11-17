@@ -7,7 +7,7 @@
 //! Kubernetes API conventions. Conditions provide a standard way to communicate
 //! the state of a resource.
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +41,7 @@ pub struct Condition {
     /// Last time the condition transitioned from one status to another
     #[schemars(with = "String")]
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_transition_time: Option<DateTime<Utc>>,
+    pub last_transition_time: Option<Timestamp>,
 
     /// The generation that was last observed
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -77,7 +77,7 @@ impl Condition {
             status,
             reason: None,
             message: None,
-            last_transition_time: Some(Utc::now()),
+            last_transition_time: Some(Timestamp::now()),
             observed_generation: None,
         }
     }
