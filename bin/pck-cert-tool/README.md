@@ -64,6 +64,7 @@ Watch platform-data secrets and automatically register them with Intel PCS to ob
 - Honors Intel PCS rate limiting (HTTP 429): pauses all PCS requests for the `Retry-After`
   duration (default 1 minute, capped at 1 hour) instead of retrying
 - Uses `update=early` query parameter for TCB Info requests
+- Can run once outside the cluster in file mode for air-gapped clusters, see [Offline flow](#offline-flow)
 
 ### get-certificates
 
@@ -123,29 +124,23 @@ pck-cert-tool get-platforms -p /path/to/get-platform-info -e /run/efivars -n my-
 
 ### register command
 
-Watch for platform-data secrets and automatically register them with Intel PCS.
+Register platforms with Intel PCS using either Kubernetes platform-data secrets or a file of exported platform-data secrets.
 
-**Note:** You need an Intel PCS API key (subscription key) to use this command.
+**Note:** Supply the Intel PCS API subscription key with `--api-key`/`-a` or the `INTEL_PCS_API_KEY` environment variable.
+
+#### Kubernetes watcher mode
+
+Without file arguments, `register` watches platform-data secrets and creates Kubernetes PCK certificate secrets:
 
 Basic usage:
 
 ```bash
-./target/release/pck-cert-tool register --api-key YOUR_API_KEY
+./target/release/pck-cert-tool register --api-key "YOUR_API_KEY"
 ```
 
-Specify a namespace:
+**Note:** Default namespace is `default`. Use `--namespace`/`-n` to specify a different namespace.
 
-```bash
-./target/release/pck-cert-tool register --api-key YOUR_API_KEY --namespace my-namespace
-```
-
-Short options:
-
-```bash
-./target/release/pck-cert-tool register -a YOUR_API_KEY -n my-namespace
-```
-
-The register command will:
+In watcher mode, the command will:
 1. Watch for secrets with label `type=platform-data`
 2. Extract platform manifest, PCE ID, and CPU SVN from each secret
 3. Send a POST request to Intel PCS API `/pckcerts/config` endpoint with platform-specific CPU SVN to retrieve matching PCK certificates
@@ -154,6 +149,13 @@ The register command will:
 6. Retrieve the signed Platform Composition Manifest from Intel PCS `/pcm`, verify its
    ECDSA P-384/SHA-384 signature against the PCM-Issuer-Chain, and store it, keyed by QE ID, in the
    shared `piid-index` secret
+
+#### File mode
+
+With both `--input-file`/`-i` and `--output-file`/`-o`, `register` runs once outside the cluster:
+it reads exported platform-data secrets, validates them like watcher mode does (skipping invalid
+ones), and writes the resulting `<qe-id>-pck` and `piid-index` Secrets to a YAML file to be applied
+with `kubectl`. See [Offline flow](#offline-flow) for the full steps.
 
 ### get-certificates command
 
@@ -391,3 +393,40 @@ Decode specific fields:
 kubectl get secret a1b2c3d4e5f6 -n default -o jsonpath='{.data.qe_id}' | base64 -d
 kubectl get secret a1b2c3d4e5f6 -n default -o jsonpath='{.data.platform_manifest}' | base64 -d
 ```
+
+## Offline flow
+
+### Prerequisites
+
+Available `pck-cert-tool` binary on a node with Intel PCS access, and a node without Intel PCS access (e.g., an offline cluster).
+
+Tool can be built:
+- [from source](#Installation)
+- or extracted from the container image:
+   ```bash
+   PCK_CERT_TOOL_IMAGE=docker.io/intel/intel-tdx-qgs:latest
+   cid=$(docker create $PCK_CERT_TOOL_IMAGE) && \
+     docker cp "$cid":/usr/local/bin/pck-cert-tool ./pck-cert-tool && \
+     docker rm "$cid" && \
+     chmod +x ./pck-cert-tool
+   ```
+
+### Steps
+
+1. On the offline cluster **without access to PCS**, export the platform-data secrets to a file
+   (`platform-data.yaml`):
+    ```bash
+    kubectl get secret -n intel-dcap-operator-system -l type=platform-data -o yaml > platform-data.yaml
+    ```
+
+2. Copy `platform-data.yaml` to a system with Intel PCS access and run `register` in file mode to
+   generate the PCK certificate secrets YAML file (`pck-secrets.yaml`):
+    ```bash
+    ./pck-cert-tool register -i platform-data.yaml -o pck-secrets.yaml \
+    -n intel-dcap-operator-system -a <PCS_API_KEY>
+    ```
+
+3. Copy the generated `pck-secrets.yaml` back to the offline node and apply it:
+    ```bash
+    cat pck-secrets.yaml | kubectl apply -f -
+    ```
