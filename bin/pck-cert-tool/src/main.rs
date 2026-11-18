@@ -17,15 +17,15 @@ use kube::{
 use pck_cert_tool::FIELD_MANAGER;
 use pck_cert_tool::cache::parse_cache_blob;
 use pck_cert_tool::pck_secret::{
-    CreatePckSecretInput, create_pck_secret, patch_piid_index, pck_secret_is_valid, pck_secret_name,
+    create_pck_secret, patch_piid_index, pck_secret_is_valid, pck_secret_name,
 };
 use pck_cert_tool::pcs_client::{
-    PckCertsRequest, PcsApiError, PcsPause, PcsRateLimited, build_pcs_http_client, fetch_pcm,
-    fetch_platform_cache, verify_pcm,
+    PckCertsRequest, PcsApiError, PcsPause, PcsRateLimited, build_pcs_http_client,
 };
 use pck_cert_tool::platform_data::{
     QE_ID_HEX_LEN, is_fixed_len_hex, prepare_registration, registration_fingerprint,
 };
+use pck_cert_tool::registration::{register_from_file, resolve_platform};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -65,6 +65,8 @@ enum Commands {
     /// Get PCK certificates from secret and write to file, watching for updates
     GetCertificates(GetCertificatesArgs),
     /// Watch platform-data secrets and register them with Intel PCS to get PCK certificates
+    /// or register them from a JSON file, writing the resulting PCK certificates to file prepared
+    /// to be applied to the cluster as Kubernetes secrets
     Register(RegisterArgs),
     /// Readiness/liveness probe helpers (exit 0 = ok, 1 = not ok)
     Probe(ProbeArgs),
@@ -135,6 +137,15 @@ struct RegisterArgs {
     /// Kubernetes namespace (default: default)
     #[arg(short, long, default_value = "default")]
     namespace: String,
+
+    /// platform-data Secrets file (`kubectl get secret -l type=platform-data -o yaml`); enables
+    /// finite file mode and requires --output-file
+    #[arg(short = 'i', long, requires = "output_file")]
+    input_file: Option<PathBuf>,
+
+    /// Output YAML containing directly applicable Kubernetes Secrets; requires --input-file
+    #[arg(short = 'o', long, requires = "input_file")]
+    output_file: Option<PathBuf>,
 }
 
 #[derive(Parser, Debug)]
@@ -709,7 +720,6 @@ async fn process_platform_secret(
         &secret_name,
         &ctx.namespace,
         &request_body,
-        &platform_data_fingerprint,
     )
     .await
     {
@@ -744,44 +754,25 @@ async fn register_platform(
     secret_name: &str,
     namespace: &str,
     request_body: &PckCertsRequest,
-    platform_data_fingerprint: &str,
 ) -> Result<()> {
-    info!("Requesting PCK certificates from Intel PCS API");
-    let platform_cache = fetch_platform_cache(http_client, api_key, request_body).await?;
+    // Resolve everything before writing: once the PCK secret is valid, registration is skipped
+    // and a missing PIID index entry is never retried.
+    let platform =
+        resolve_platform(http_client, api_key, secret_name, namespace, request_body).await?;
 
-    // Fetch and verify the Platform Composition Manifest before writing anything: once the PCK
-    // secret is valid, registration is skipped and a missing PIID index entry is never retried.
-    let pcm = fetch_pcm(http_client, api_key, &request_body.platform_manifest).await?;
-    verify_pcm(
-        &pcm.body,
-        &pcm.issuer_chain,
-        &platform_cache.pck_issuer_chain,
-    )
-    .context("Failed to verify the Platform Composition Manifest")?;
-
-    // Write the PCK certificate secret for this platform.
-    create_pck_secret(
-        secrets,
-        CreatePckSecretInput {
-            fmspc: platform_cache.fmspc,
-            cache_data: platform_cache.cache_data,
-            expiration_time: platform_cache.expiration_time,
-            namespace: namespace.to_string(),
-            platform_data_fingerprint: platform_data_fingerprint.to_string(),
-            pck_secret_name: pck_secret_name(secret_name),
-        },
-    )
-    .await?;
+    create_pck_secret(secrets, platform.pck_secret).await?;
 
     // Record the verified Platform Composition Manifest in the shared PIID index secret,
     // keyed by the QE ID (which is the platform-data secret name).
-    patch_piid_index(secrets, secret_name, &pcm.body).await?;
+    patch_piid_index(secrets, namespace, &platform.qe_id, &platform.pcm).await?;
 
     Ok(())
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     // Initialize tracing subscriber with INFO level by default
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -820,7 +811,20 @@ async fn main() -> Result<()> {
                     .ok()
                     .filter(|s| !s.is_empty())
             });
-            register_platforms(api_key.as_deref(), &reg_args.namespace).await?;
+
+            // clap requires --input-file and --output-file together
+            match reg_args.input_file.zip(reg_args.output_file) {
+                Some((input_file, output_file)) => {
+                    register_from_file(
+                        api_key.as_deref(),
+                        &reg_args.namespace,
+                        &input_file,
+                        &output_file,
+                    )
+                    .await?;
+                }
+                None => register_platforms(api_key.as_deref(), &reg_args.namespace).await?,
+            }
         }
         Commands::Probe(probe_args) => match probe_args.command {
             ProbeCommands::CacheReady(args) => {
@@ -857,6 +861,50 @@ mod tests {
 
     /// A well-formed, 32-hex-character sample ID for tests.
     const SAMPLE_ID: &str = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4";
+
+    #[test]
+    fn register_cli_supports_watcher_and_file_modes() {
+        let watcher = Args::try_parse_from(["pck-cert-tool", "register", "--namespace", "qgs"])
+            .expect("watcher mode should parse");
+        let Commands::Register(watcher) = watcher.command else {
+            panic!("expected register command");
+        };
+        assert_eq!(watcher.namespace, "qgs");
+        assert!(watcher.input_file.is_none());
+        assert!(watcher.output_file.is_none());
+
+        let file_mode = Args::try_parse_from([
+            "pck-cert-tool",
+            "register",
+            "--input-file",
+            "platforms.json",
+            "--output-file",
+            "pck-secrets.yaml",
+        ])
+        .expect("file mode should parse");
+        let Commands::Register(file_mode) = file_mode.command else {
+            panic!("expected register command");
+        };
+        assert_eq!(
+            file_mode.input_file.as_deref(),
+            Some(Path::new("platforms.json"))
+        );
+        assert_eq!(
+            file_mode.output_file.as_deref(),
+            Some(Path::new("pck-secrets.yaml"))
+        );
+
+        assert!(
+            Args::try_parse_from([
+                "pck-cert-tool",
+                "register",
+                "--input-file",
+                "platforms.json"
+            ])
+            .is_err(),
+            "file mode must require --output-file"
+        );
+    }
 
     /// Creates a fresh temp directory for a test case, tagged for easy identification.
     fn unique_temp_dir(tag: &str) -> std::path::PathBuf {
