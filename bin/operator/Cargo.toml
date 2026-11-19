@@ -17,4 +17,4 @@ tracing-subscriber = { workspace = true }
 thiserror = "2.0"
 serde-saphyr = "2.0"
 schemars = "1"
-jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }
+jiff = { version = "1.0", default-features = false, features = ["std", "serde"] }
