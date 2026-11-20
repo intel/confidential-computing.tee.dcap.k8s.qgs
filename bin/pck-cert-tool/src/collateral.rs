@@ -9,6 +9,7 @@ use crate::pcs_client::{
     decode_and_validate_issuer_chain, verify_enclave_identity, verify_tcb_info,
 };
 use anyhow::{Context, Result, anyhow, bail};
+use clap::ValueEnum;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
@@ -20,6 +21,49 @@ use x509_parser::extensions::{DistributionPointName, GeneralName, ParsedExtensio
 use x509_parser::prelude::{parse_x509_certificate, parse_x509_crl};
 
 const PCS_API_VERSION: u8 = 4;
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum FmspcPlatform {
+    #[value(name = "all")]
+    All,
+    #[value(name = "client")]
+    Client,
+    #[value(name = "E3")]
+    E3,
+    #[value(name = "E5")]
+    E5,
+}
+
+impl FmspcPlatform {
+    fn as_query_value(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Client => "client",
+            Self::E3 => "E3",
+            Self::E5 => "E5",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum TcbUpdateType {
+    #[value(name = "standard")]
+    Standard,
+    #[value(name = "early")]
+    Early,
+    #[value(name = "all")]
+    All,
+}
+
+impl TcbUpdateType {
+    fn updates(self) -> &'static [&'static str] {
+        match self {
+            Self::Standard => &["standard"],
+            Self::Early => &["early"],
+            Self::All => &["standard", "early"],
+        }
+    }
+}
 
 pub fn parse_fmspc(value: &str) -> std::result::Result<String, String> {
     if value.len() != FMSPC_HEX_LEN || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -140,9 +184,14 @@ fn parse_fmspcs_response(body: &str) -> Result<Vec<String>> {
     Ok(fmspcs)
 }
 
-async fn fetch_all_fmspcs(http_client: &reqwest::Client, base_url: &Url) -> Result<Vec<String>> {
+async fn fetch_fmspcs(
+    http_client: &reqwest::Client,
+    base_url: &Url,
+    platform: FmspcPlatform,
+) -> Result<Vec<String>> {
     let mut url = base_url.join("fmspcs")?;
-    url.query_pairs_mut().append_pair("platform", "all");
+    let platform = platform.as_query_value();
+    url.query_pairs_mut().append_pair("platform", platform);
     let response = http_client
         .get(url.clone())
         .send()
@@ -150,6 +199,7 @@ async fn fetch_all_fmspcs(http_client: &reqwest::Client, base_url: &Url) -> Resu
         .with_context(|| format!("HTTP GET to {url} failed"))?;
     let body = successful_response(response, &url).await?.text().await?;
     parse_fmspcs_response(&body)
+        .with_context(|| format!("failed to fetch FMSPCs for platform={platform}"))
 }
 
 fn verify_crl(crl_der: &[u8], signer_der: &[u8], description: &str) -> Result<()> {
@@ -203,9 +253,9 @@ fn tdx_base_url(sgx_base_url: &Url) -> Result<Url> {
     Ok(url)
 }
 
-fn standard_url(base_url: &Url, path: &str) -> Result<Url> {
+fn update_url(base_url: &Url, path: &str, update: &str) -> Result<Url> {
     let mut url = base_url.join(path)?;
-    url.query_pairs_mut().append_pair("update", "standard");
+    url.query_pairs_mut().append_pair("update", update);
     Ok(url)
 }
 
@@ -272,15 +322,34 @@ fn initial_output() -> Value {
     })
 }
 
+fn remove_empty_identity_placeholders(output: &mut Value) {
+    let Some(collaterals) = output["collaterals"].as_object_mut() else {
+        return;
+    };
+    for key in ["qeidentity", "tdqeidentity", "qveidentity"] {
+        if collaterals.get(key) == Some(&Value::String(String::new())) {
+            collaterals.remove(key);
+        }
+    }
+}
+
 #[instrument(skip(fmspcs, output_file), fields(output_file = %output_file.display()))]
-pub async fn fetch_collateral(fmspcs: Vec<String>, output_file: PathBuf) -> Result<()> {
+pub async fn fetch_collateral(
+    fmspcs: Vec<String>,
+    platform: FmspcPlatform,
+    tcb_update_type: TcbUpdateType,
+    output_file: PathBuf,
+) -> Result<()> {
     let base_url = crate::pcs_client::PCS_BASE_URL.clone();
     let tdx_url = tdx_base_url(&base_url)?;
     let http_client = build_pcs_http_client()?;
     let mut output = initial_output();
     let fmspcs = if fmspcs.is_empty() {
-        info!("Fetching all Intel PCS FMSPCs");
-        fetch_all_fmspcs(&http_client, &base_url).await?
+        info!(
+            platform = platform.as_query_value(),
+            "Fetching Intel PCS FMSPCs"
+        );
+        fetch_fmspcs(&http_client, &base_url, platform).await?
     } else {
         fmspcs
     };
@@ -320,52 +389,65 @@ pub async fn fetch_collateral(fmspcs: Vec<String>, output_file: PathBuf) -> Resu
     for fmspc in BTreeSet::from_iter(fmspcs) {
         info!(%fmspc, "Fetching Intel SGX and TDX TCB info");
 
-        let mut sgx_tcb_url = base_url.join("tcb")?;
-        sgx_tcb_url
-            .query_pairs_mut()
-            .append_pair("fmspc", &fmspc)
-            .append_pair("update", "standard");
-        let sgx_tcb = fetch_signed_json(&http_client, &sgx_tcb_url, TCB_INFO_ISSUER_CHAIN).await?;
-        let sgx_tcb_value = verified_tcb_info_value(&sgx_tcb, &processor_crl.issuer_chain, &fmspc)?;
-        ensure_consistent_chain(&mut tcb_issuer_chain, &sgx_tcb.issuer_chain, "TCB Info")?;
-
         let mut tcbinfo = Map::new();
         tcbinfo.insert("fmspc".into(), Value::String(fmspc.clone()));
-        tcbinfo.insert("sgx_tcbinfo".into(), sgx_tcb_value);
+        for update in tcb_update_type.updates() {
+            let key_suffix = if *update == "early" { "_early" } else { "" };
 
-        let mut tdx_tcb_url = tdx_url.join("tcb")?;
-        tdx_tcb_url
-            .query_pairs_mut()
-            .append_pair("fmspc", &fmspc)
-            .append_pair("update", "standard");
-        if let Some(tdx_tcb) =
-            fetch_optional_signed_json(&http_client, &tdx_tcb_url, TCB_INFO_ISSUER_CHAIN).await?
-        {
-            let tdx_tcb_value =
-                verified_tcb_info_value(&tdx_tcb, &processor_crl.issuer_chain, &fmspc)?;
-            ensure_consistent_chain(&mut tcb_issuer_chain, &tdx_tcb.issuer_chain, "TCB Info")?;
-            tcbinfo.insert("tdx_tcbinfo".into(), tdx_tcb_value);
+            let mut sgx_tcb_url = base_url.join("tcb")?;
+            sgx_tcb_url
+                .query_pairs_mut()
+                .append_pair("fmspc", &fmspc)
+                .append_pair("update", update);
+            let sgx_tcb =
+                fetch_signed_json(&http_client, &sgx_tcb_url, TCB_INFO_ISSUER_CHAIN).await?;
+            let sgx_tcb_value =
+                verified_tcb_info_value(&sgx_tcb, &processor_crl.issuer_chain, &fmspc)?;
+            ensure_consistent_chain(&mut tcb_issuer_chain, &sgx_tcb.issuer_chain, "TCB Info")?;
+            tcbinfo.insert(format!("sgx_tcbinfo{key_suffix}"), sgx_tcb_value);
+
+            let mut tdx_tcb_url = tdx_url.join("tcb")?;
+            tdx_tcb_url
+                .query_pairs_mut()
+                .append_pair("fmspc", &fmspc)
+                .append_pair("update", update);
+            if let Some(tdx_tcb) =
+                fetch_optional_signed_json(&http_client, &tdx_tcb_url, TCB_INFO_ISSUER_CHAIN)
+                    .await?
+            {
+                let tdx_tcb_value =
+                    verified_tcb_info_value(&tdx_tcb, &processor_crl.issuer_chain, &fmspc)?;
+                ensure_consistent_chain(&mut tcb_issuer_chain, &tdx_tcb.issuer_chain, "TCB Info")?;
+                tcbinfo.insert(format!("tdx_tcbinfo{key_suffix}"), tdx_tcb_value);
+            }
         }
         tcbinfos.push(Value::Object(tcbinfo));
     }
 
     let mut enclave_issuer_chain = None;
     let identities = [
-        ("qeidentity", &base_url, "qe/identity"),
-        ("tdqeidentity", &tdx_url, "qe/identity"),
-        ("qveidentity", &base_url, "qve/identity"),
+        ("qe", &base_url, "qe/identity"),
+        ("tdqe", &tdx_url, "qe/identity"),
+        ("qve", &base_url, "qve/identity"),
     ];
-    for (output_key, identity_base_url, path) in identities {
-        info!(identity = output_key, "Fetching Intel enclave identity");
-        let url = standard_url(identity_base_url, path)?;
-        let identity = fetch_signed_json(&http_client, &url, ENCLAVE_IDENTITY_ISSUER_CHAIN).await?;
-        let identity_value = verified_identity_value(&identity, &processor_crl.issuer_chain)?;
-        ensure_consistent_chain(
-            &mut enclave_issuer_chain,
-            &identity.issuer_chain,
-            "enclave identity",
-        )?;
-        output["collaterals"][output_key] = identity_value;
+    for (identity_type, identity_base_url, path) in identities {
+        for update in tcb_update_type.updates() {
+            info!(
+                identity = identity_type,
+                update, "Fetching Intel enclave identity"
+            );
+            let url = update_url(identity_base_url, path, update)?;
+            let identity =
+                fetch_signed_json(&http_client, &url, ENCLAVE_IDENTITY_ISSUER_CHAIN).await?;
+            let identity_value = verified_identity_value(&identity, &processor_crl.issuer_chain)?;
+            ensure_consistent_chain(
+                &mut enclave_issuer_chain,
+                &identity.issuer_chain,
+                "enclave identity",
+            )?;
+            let key_suffix = if *update == "early" { "_early" } else { "" };
+            output["collaterals"][format!("{identity_type}identity{key_suffix}")] = identity_value;
+        }
     }
 
     let mut pck_chains = Map::new();
@@ -387,6 +469,7 @@ pub async fn fetch_collateral(fmspcs: Vec<String>, output_file: PathBuf) -> Resu
         Value::String(enclave_issuer_chain.context("missing enclave identity issuer chain")?);
     output["collaterals"]["rootcacrl_cdp"] = Value::String(root_crl_cdp);
     output["collaterals"]["rootcacrl"] = Value::String(hex_encode(&root_crl));
+    remove_empty_identity_placeholders(&mut output);
 
     let encoded = serde_json::to_string(&output).context("failed to serialize collateral JSON")?;
     fs::write(&output_file, encoded)
@@ -455,5 +538,19 @@ mod tests {
         let parsed: Value = serde_json::from_str(body).unwrap();
 
         assert_eq!(serde_json::to_string(&parsed).unwrap(), body);
+    }
+
+    #[test]
+    fn removes_only_unfetched_identity_placeholders() {
+        let mut output = initial_output();
+        output["collaterals"]["qeidentity_early"] = json!({"enclaveIdentity": {}});
+
+        remove_empty_identity_placeholders(&mut output);
+
+        let collaterals = output["collaterals"].as_object().unwrap();
+        assert!(!collaterals.contains_key("qeidentity"));
+        assert!(!collaterals.contains_key("tdqeidentity"));
+        assert!(!collaterals.contains_key("qveidentity"));
+        assert!(collaterals.contains_key("qeidentity_early"));
     }
 }
