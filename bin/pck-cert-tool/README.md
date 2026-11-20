@@ -92,58 +92,6 @@ The binary will be available at `target/release/pck-cert-tool`
 
 ## Usage
 
-### fetch command
-
-Fetch the public Intel PCS v4 collateral needed to provision Trustee in an offline environment.
-The command retrieves TDX TCB Info for each TDX-capable selected FMSPC, the TDQE identity,
-processor and platform PCK CRLs, the Intel SGX Root CA CRL, and all associated issuer chains.
-PCS signatures, certificate chains, and CRL signatures are verified before the output file is written.
-
-```bash
-./target/release/pck-cert-tool fetch \
-  --fmspc 00A06D080000 \
-  --fmspc 70A06D070000 \
-  --output_file platform_collaterals.json
-```
-
-`--fmspc` may be repeated or supplied as a comma-separated list.
-Values must be exactly 12 hexadecimal characters and are normalized to uppercase. If `--fmspc`
-is omitted, the command retrieves all available FMSPCs from PCS using `platform=all`.
-Use `--platform` (`-p`) with `all`, `client`, `E3`, or `E5` to restrict automatic FMSPC
-discovery. Explicit `--fmspc` values take precedence over `--platform`.
-
-Use `--tcb_update_type` (`-t`) with `standard`, `early`, or `all`. Early collateral is written
-with Python-compatible `_early` keys such as `tdx_tcbinfo_early` and `tdqeidentity_early`.
-The hyphenated output-file alias is also accepted:
-
-```bash
-./target/release/pck-cert-tool fetch \
-  -p E5 \
-  -t early \
-  --output-file platform_collaterals.json
-```
-
-Fetch with available FMSPCs from the cluster's `intel-dcap-operator-system` namespace:
-
-```bash
-fmspcs=$(
-  kubectl get secrets \
-    -n intel-dcap-operator-system \
-    -l fmspc \
-    -o jsonpath='{range .items[*]}{.metadata.labels.fmspc}{","}{end}' |
-  sed 's/,$//'
-)
-
-./target/release/pck-cert-tool fetch \
-  --fmspc "$fmspcs" \
-  --tcb_update_type early \
-  --output_file platform_collaterals.json
-```
-
-The generated JSON uses the Trustee-compatible `platforms`/`collaterals` envelope.
-
-**Note:** Because this mode retrieves only public collateral, it does not require an Intel PCS API subscription key or platform registration input.
-
 ### get-platforms command
 
 Get platform data and create Kubernetes secrets. The secret name is automatically derived from the QE ID.
@@ -247,6 +195,55 @@ The command will:
    `--id-file`, or the reserved all-zero ID if it came from `--id`
 5. Continue watching for updates to the secret
 6. Rewrite the file whenever the secret is updated with valid content
+
+### fetch command
+
+Fetch the public Intel PCS v4 collateral.
+The command retrieves TDX TCB Info for each TDX-capable selected FMSPC, the TDQE identity,
+processor and platform PCK CRLs, the Intel SGX Root CA CRL, and all associated issuer chains.
+PCS signatures, certificate chains, and CRL signatures are verified before the output file is written.
+
+```bash
+./target/release/pck-cert-tool fetch \
+  --fmspc 00A06D080000 \
+  --fmspc 70A06D070000 \
+  --output_file platform_collaterals.json
+```
+
+`--fmspc` may be repeated or supplied as a comma-separated list.
+Values must be exactly 12 hexadecimal characters and are normalized to uppercase. 
+If `--fmspc` is omitted, the command retrieves all available FMSPCs from PCS.
+
+Use `--platform` (`-p`) with `all`, `client`, `E3`, or `E5` to restrict automatic FMSPC discovery. 
+Explicit `--fmspc` values take precedence over `--platform`.
+
+Use `--tcb_update_type` (`-t`) with `standard`, `early`, or `all`.
+
+```bash
+./target/release/pck-cert-tool fetch \
+  -p E5 \
+  -t early \
+  --output-file platform_collaterals.json
+```
+
+Fetch with available FMSPCs from the cluster's `intel-dcap-operator-system` namespace:
+
+```bash
+fmspcs=$(
+  kubectl get secrets \
+    -n intel-dcap-operator-system \
+    -l fmspc \
+    -o jsonpath='{range .items[*]}{.metadata.labels.fmspc}{","}{end}' |
+  sed 's/,$//'
+)
+
+./target/release/pck-cert-tool fetch \
+  --fmspc "$fmspcs" \
+  --tcb_update_type early \
+  --output_file platform_collaterals.json
+```
+
+**Note:** Because this mode retrieves only public collateral, it does not require an Intel PCS API subscription key or platform registration input.
 
 ## Secret Data Format
 

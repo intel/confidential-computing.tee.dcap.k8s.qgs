@@ -1,12 +1,12 @@
 // Copyright(c) 2026 Intel Corporation
 // SPDX-License-Identifier: Apache-2.0
 
-//! Fetches the public Intel PCS collateral used to provision Trustee offline.
+//! Fetches the public Intel PCS collateral.
 
 use crate::pcs_client::{
-    ENCLAVE_IDENTITY_ISSUER_CHAIN, FMSPC_HEX_LEN, PCK_CERTIFICATE_ISSUER_CHAIN,
-    PCK_CRL_ISSUER_CHAIN, TCB_INFO_ISSUER_CHAIN, build_pcs_http_client,
-    decode_and_validate_issuer_chain, verify_enclave_identity, verify_tcb_info,
+    ECDSA_P256_SIGNATURE_LEN, ENCLAVE_IDENTITY_ISSUER_CHAIN, FMSPC_HEX_LEN,
+    PCK_CERTIFICATE_ISSUER_CHAIN, PCK_CRL_ISSUER_CHAIN, TCB_INFO_ISSUER_CHAIN,
+    build_pcs_http_client, decode_and_validate_issuer_chain, verify_tcb_info,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use clap::ValueEnum;
@@ -232,16 +232,6 @@ fn root_crl_url(root_der: &[u8]) -> Result<String> {
     bail!("Intel SGX Root CA certificate has no CRL distribution point URI")
 }
 
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut encoded = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        encoded.push(HEX[(byte >> 4) as usize] as char);
-        encoded.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    encoded
-}
-
 fn tdx_base_url(sgx_base_url: &Url) -> Result<Url> {
     let path = sgx_base_url.path();
     let tdx_path = path.replace("/sgx/", "/tdx/").replace("/sgx", "/tdx");
@@ -299,6 +289,42 @@ fn verified_identity_value(response: &SignedJsonResponse, pck_issuer_chain: &str
     verify_enclave_identity(&serialized, &response.issuer_chain, pck_issuer_chain)
         .context("serialized enclave identity no longer matches its PCS signature")?;
     Ok(value)
+}
+
+#[derive(Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+struct SignedEnclaveIdentity<'a> {
+    #[serde(borrow)]
+    enclave_identity: &'a serde_json::value::RawValue,
+    signature: &'a str,
+}
+
+fn verify_enclave_identity(
+    identity_json: &str,
+    identity_issuer_chain: &str,
+    pck_issuer_chain: &str,
+) -> Result<()> {
+    let signed: SignedEnclaveIdentity<'_> =
+        serde_json::from_str(identity_json).context("Failed to parse signed enclave identity")?;
+    let signature = crate::pcs_client::decode_hex::<ECDSA_P256_SIGNATURE_LEN>(signed.signature)
+        .context("Invalid enclave identity signature encoding")?;
+
+    let (identity_root_der, signer_der) = decode_and_validate_issuer_chain(identity_issuer_chain)
+        .context("Invalid enclave identity issuer chain")?;
+    let (pck_root_der, _) = decode_and_validate_issuer_chain(pck_issuer_chain)
+        .context("Invalid PCK certificate issuer chain")?;
+    if identity_root_der != pck_root_der {
+        bail!("Enclave identity issuer chain Root CA does not match PCK issuer chain Root CA");
+    }
+
+    let (_, signer_cert) = parse_x509_certificate(&signer_der)
+        .map_err(|e| anyhow!("Failed to parse enclave identity signing certificate: {e}"))?;
+    ring::signature::UnparsedPublicKey::new(
+        &ring::signature::ECDSA_P256_SHA256_FIXED,
+        &signer_cert.public_key().subject_public_key.data,
+    )
+    .verify(signed.enclave_identity.get().as_bytes(), &signature)
+    .map_err(|_| anyhow!("Enclave identity signature verification failed"))
 }
 
 fn initial_output() -> Value {
@@ -438,8 +464,8 @@ pub async fn fetch_collateral(
 
     output["collaterals"]["tcbinfos"] = Value::Array(tcbinfos);
     output["collaterals"]["pckcacrl"] = json!({
-        "processorCrl": hex_encode(&processor_crl.body),
-        "platformCrl": hex_encode(&platform_crl.body),
+        "processorCrl": hex::encode(&processor_crl.body),
+        "platformCrl": hex::encode(&platform_crl.body),
     });
     output["collaterals"]["certificates"][PCK_CERTIFICATE_ISSUER_CHAIN] = Value::Object(pck_chains);
     output["collaterals"]["certificates"][TCB_INFO_ISSUER_CHAIN] =
@@ -447,7 +473,7 @@ pub async fn fetch_collateral(
     output["collaterals"]["certificates"][ENCLAVE_IDENTITY_ISSUER_CHAIN] =
         Value::String(enclave_issuer_chain.context("missing enclave identity issuer chain")?);
     output["collaterals"]["rootcacrl_cdp"] = Value::String(root_crl_cdp);
-    output["collaterals"]["rootcacrl"] = Value::String(hex_encode(&root_crl));
+    output["collaterals"]["rootcacrl"] = Value::String(hex::encode(&root_crl));
     remove_empty_identity_placeholders(&mut output);
 
     let encoded = serde_json::to_string(&output).context("failed to serialize collateral JSON")?;
