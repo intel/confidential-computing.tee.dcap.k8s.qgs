@@ -110,11 +110,17 @@ PCS signatures, certificate chains, and CRL signatures are verified before the o
 `--fmspc` may be repeated or supplied as a comma-separated list.
 Values must be exactly 12 hexadecimal characters and are normalized to uppercase. If `--fmspc`
 is omitted, the command retrieves all available FMSPCs from PCS using `platform=all`.
+Use `--platform` (`-p`) with `all`, `client`, `E3`, or `E5` to restrict automatic FMSPC
+discovery. Explicit `--fmspc` values take precedence over `--platform`.
+
+Use `--tcb_update_type` (`-t`) with `standard`, `early`, or `all`. Early collateral is written
+with Python-compatible `_early` keys such as `sgx_tcbinfo_early` and `tdqeidentity_early`.
 The hyphenated output-file alias is also accepted:
 
 ```bash
 ./pck-cert-tool fetch \
-  --fmspc 00A06D080000,70A06D070000 \
+  -p E5 \
+  -t early \
   --output-file platform_collaterals.json
 ```
 

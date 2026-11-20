@@ -16,7 +16,7 @@ use kube::{
 };
 use pck_cert_tool::FIELD_MANAGER;
 use pck_cert_tool::cache::parse_cache_blob;
-use pck_cert_tool::collateral::{fetch_collateral, parse_fmspc};
+use pck_cert_tool::collateral::{FmspcPlatform, TcbUpdateType, fetch_collateral, parse_fmspc};
 use pck_cert_tool::pck_secret::{
     create_pck_secret, patch_piid_index, pck_secret_is_valid, pck_secret_name,
 };
@@ -161,6 +161,20 @@ pub struct FetchCollateralArgs {
         num_args = 1..
     )]
     pub fmspc: Vec<String>,
+
+    /// Platform family used to discover FMSPCs when --fmspc is omitted.
+    #[arg(short, long, value_enum, default_value = "all")]
+    pub platform: FmspcPlatform,
+
+    /// Type of TCB info and enclave identity update to retrieve.
+    #[arg(
+        short = 't',
+        long = "tcb_update_type",
+        visible_alias = "tcb-update-type",
+        value_enum,
+        default_value = "standard"
+    )]
+    pub tcb_update_type: TcbUpdateType,
 
     /// Trustee-compatible collateral JSON output file.
     #[arg(
@@ -875,7 +889,13 @@ async fn main() -> Result<()> {
             }
         },
         Commands::Fetch(fetch_args) => {
-            fetch_collateral(fetch_args.fmspc, fetch_args.output_file).await?;
+            fetch_collateral(
+                fetch_args.fmspc,
+                fetch_args.platform,
+                fetch_args.tcb_update_type,
+                fetch_args.output_file,
+            )
+            .await?;
         }
     }
 
