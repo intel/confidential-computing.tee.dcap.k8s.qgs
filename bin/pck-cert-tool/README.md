@@ -95,13 +95,12 @@ The binary will be available at `target/release/pck-cert-tool`
 ### fetch command
 
 Fetch the public Intel PCS v4 collateral needed to provision Trustee in an offline environment.
-The command retrieves SGX and, when available, TDX TCB Info for each selected FMSPC, the QE,
-TDQE, and QVE identities, processor and platform PCK CRLs, the Intel SGX Root CA CRL, and all
-associated issuer chains.
+The command retrieves TDX TCB Info for each TDX-capable selected FMSPC, the TDQE identity,
+processor and platform PCK CRLs, the Intel SGX Root CA CRL, and all associated issuer chains.
 PCS signatures, certificate chains, and CRL signatures are verified before the output file is written.
 
 ```bash
-./pck-cert-tool fetch \
+./target/release/pck-cert-tool fetch \
   --fmspc 00A06D080000 \
   --fmspc 70A06D070000 \
   --output_file platform_collaterals.json
@@ -114,14 +113,31 @@ Use `--platform` (`-p`) with `all`, `client`, `E3`, or `E5` to restrict automati
 discovery. Explicit `--fmspc` values take precedence over `--platform`.
 
 Use `--tcb_update_type` (`-t`) with `standard`, `early`, or `all`. Early collateral is written
-with Python-compatible `_early` keys such as `sgx_tcbinfo_early` and `tdqeidentity_early`.
+with Python-compatible `_early` keys such as `tdx_tcbinfo_early` and `tdqeidentity_early`.
 The hyphenated output-file alias is also accepted:
 
 ```bash
-./pck-cert-tool fetch \
+./target/release/pck-cert-tool fetch \
   -p E5 \
   -t early \
   --output-file platform_collaterals.json
+```
+
+Fetch with available FMSPCs from the cluster's `intel-dcap-operator-system` namespace:
+
+```bash
+fmspcs=$(
+  kubectl get secrets \
+    -n intel-dcap-operator-system \
+    -l fmspc \
+    -o jsonpath='{range .items[*]}{.metadata.labels.fmspc}{","}{end}' |
+  sed 's/,$//'
+)
+
+./target/release/pck-cert-tool fetch \
+  --fmspc "$fmspcs" \
+  --tcb_update_type early \
+  --output_file platform_collaterals.json
 ```
 
 The generated JSON uses the Trustee-compatible `platforms`/`collaterals` envelope.
