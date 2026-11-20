@@ -474,7 +474,7 @@ struct SignedTcbInfo<'a> {
 }
 
 /// Length of an ECDSA P-256 signature in the fixed r||s encoding.
-const ECDSA_P256_SIGNATURE_LEN: usize = 64;
+pub(crate) const ECDSA_P256_SIGNATURE_LEN: usize = 64;
 
 /// Length of an ECDSA P-384 signature in the fixed r||s encoding.
 const ECDSA_P384_SIGNATURE_LEN: usize = 96;
@@ -552,7 +552,7 @@ pub(crate) fn decode_and_validate_issuer_chain(chain: &str) -> Result<(Vec<u8>, 
 }
 
 /// Decodes a hex string of exactly `2 * N` characters into `N` bytes.
-fn decode_hex<const N: usize>(s: &str) -> Result<[u8; N]> {
+pub(crate) fn decode_hex<const N: usize>(s: &str) -> Result<[u8; N]> {
     anyhow::ensure!(
         s.len() == 2 * N && s.bytes().all(|b| b.is_ascii_hexdigit()),
         "expected a {}-character hex string",
@@ -743,42 +743,6 @@ pub(crate) fn verify_tcb_info(
         &signer_cert.public_key().subject_public_key.data,
         expected_fmspc,
     )
-}
-
-#[derive(Deserialize, Debug)]
-#[serde(rename_all = "camelCase")]
-struct SignedEnclaveIdentity<'a> {
-    #[serde(borrow)]
-    enclave_identity: &'a serde_json::value::RawValue,
-    signature: &'a str,
-}
-
-pub(crate) fn verify_enclave_identity(
-    identity_json: &str,
-    identity_issuer_chain: &str,
-    pck_issuer_chain: &str,
-) -> Result<()> {
-    let signed: SignedEnclaveIdentity<'_> =
-        serde_json::from_str(identity_json).context("Failed to parse signed enclave identity")?;
-    let signature = decode_hex::<ECDSA_P256_SIGNATURE_LEN>(signed.signature)
-        .context("Invalid enclave identity signature encoding")?;
-
-    let (identity_root_der, signer_der) = decode_and_validate_issuer_chain(identity_issuer_chain)
-        .context("Invalid enclave identity issuer chain")?;
-    let (pck_root_der, _) = decode_and_validate_issuer_chain(pck_issuer_chain)
-        .context("Invalid PCK certificate issuer chain")?;
-    if identity_root_der != pck_root_der {
-        bail!("Enclave identity issuer chain Root CA does not match PCK issuer chain Root CA");
-    }
-
-    let (_, signer_cert) = parse_x509_certificate(&signer_der)
-        .map_err(|e| anyhow!("Failed to parse enclave identity signing certificate: {e}"))?;
-    ring::signature::UnparsedPublicKey::new(
-        &ring::signature::ECDSA_P256_SHA256_FIXED,
-        &signer_cert.public_key().subject_public_key.data,
-    )
-    .verify(signed.enclave_identity.get().as_bytes(), &signature)
-    .map_err(|_| anyhow!("Enclave identity signature verification failed"))
 }
 
 /// Verified PCS response encoded for the local QPL cache.
