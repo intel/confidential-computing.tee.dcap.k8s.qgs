@@ -333,7 +333,7 @@ fn remove_empty_identity_placeholders(output: &mut Value) {
     }
 }
 
-#[instrument(skip(fmspcs, output_file), fields(output_file = %output_file.display()))]
+#[instrument(skip(fmspcs, output_file))]
 pub async fn fetch_collateral(
     fmspcs: Vec<String>,
     platform: FmspcPlatform,
@@ -387,24 +387,12 @@ pub async fn fetch_collateral(
     let mut tcbinfos = Vec::new();
     let mut tcb_issuer_chain = None;
     for fmspc in BTreeSet::from_iter(fmspcs) {
-        info!(%fmspc, "Fetching Intel SGX and TDX TCB info");
+        info!(%fmspc, "Fetching Intel TDX TCB info");
 
         let mut tcbinfo = Map::new();
         tcbinfo.insert("fmspc".into(), Value::String(fmspc.clone()));
         for update in tcb_update_type.updates() {
             let key_suffix = if *update == "early" { "_early" } else { "" };
-
-            let mut sgx_tcb_url = base_url.join("tcb")?;
-            sgx_tcb_url
-                .query_pairs_mut()
-                .append_pair("fmspc", &fmspc)
-                .append_pair("update", update);
-            let sgx_tcb =
-                fetch_signed_json(&http_client, &sgx_tcb_url, TCB_INFO_ISSUER_CHAIN).await?;
-            let sgx_tcb_value =
-                verified_tcb_info_value(&sgx_tcb, &processor_crl.issuer_chain, &fmspc)?;
-            ensure_consistent_chain(&mut tcb_issuer_chain, &sgx_tcb.issuer_chain, "TCB Info")?;
-            tcbinfo.insert(format!("sgx_tcbinfo{key_suffix}"), sgx_tcb_value);
 
             let mut tdx_tcb_url = tdx_url.join("tcb")?;
             tdx_tcb_url
@@ -421,33 +409,24 @@ pub async fn fetch_collateral(
                 tcbinfo.insert(format!("tdx_tcbinfo{key_suffix}"), tdx_tcb_value);
             }
         }
-        tcbinfos.push(Value::Object(tcbinfo));
+        if tcbinfo.len() > 1 {
+            tcbinfos.push(Value::Object(tcbinfo));
+        }
     }
 
     let mut enclave_issuer_chain = None;
-    let identities = [
-        ("qe", &base_url, "qe/identity"),
-        ("tdqe", &tdx_url, "qe/identity"),
-        ("qve", &base_url, "qve/identity"),
-    ];
-    for (identity_type, identity_base_url, path) in identities {
-        for update in tcb_update_type.updates() {
-            info!(
-                identity = identity_type,
-                update, "Fetching Intel enclave identity"
-            );
-            let url = update_url(identity_base_url, path, update)?;
-            let identity =
-                fetch_signed_json(&http_client, &url, ENCLAVE_IDENTITY_ISSUER_CHAIN).await?;
-            let identity_value = verified_identity_value(&identity, &processor_crl.issuer_chain)?;
-            ensure_consistent_chain(
-                &mut enclave_issuer_chain,
-                &identity.issuer_chain,
-                "enclave identity",
-            )?;
-            let key_suffix = if *update == "early" { "_early" } else { "" };
-            output["collaterals"][format!("{identity_type}identity{key_suffix}")] = identity_value;
-        }
+    for update in tcb_update_type.updates() {
+        info!(update, "Fetching Intel TDQE identity");
+        let url = update_url(&tdx_url, "qe/identity", update)?;
+        let identity = fetch_signed_json(&http_client, &url, ENCLAVE_IDENTITY_ISSUER_CHAIN).await?;
+        let identity_value = verified_identity_value(&identity, &processor_crl.issuer_chain)?;
+        ensure_consistent_chain(
+            &mut enclave_issuer_chain,
+            &identity.issuer_chain,
+            "enclave identity",
+        )?;
+        let key_suffix = if *update == "early" { "_early" } else { "" };
+        output["collaterals"][format!("tdqeidentity{key_suffix}")] = identity_value;
     }
 
     let mut pck_chains = Map::new();
