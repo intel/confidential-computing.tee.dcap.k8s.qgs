@@ -23,28 +23,8 @@ use x509_parser::prelude::{parse_x509_certificate, parse_x509_crl};
 
 const PCS_API_VERSION: u8 = 4;
 
-#[derive(Clone, Copy, Debug, ValueEnum)]
-pub enum FmspcPlatform {
-    #[value(name = "all")]
-    All,
-    #[value(name = "client")]
-    Client,
-    #[value(name = "E3")]
-    E3,
-    #[value(name = "E5")]
-    E5,
-}
-
-impl FmspcPlatform {
-    fn as_query_value(self) -> &'static str {
-        match self {
-            Self::All => "all",
-            Self::Client => "client",
-            Self::E3 => "E3",
-            Self::E5 => "E5",
-        }
-    }
-}
+/// E5 - multi-socket server platforms supporting DCAP attestation (examples include but may not be limited to: Intel® Xeon® D and Intel® Xeon® Scalable)
+const FMSPC_PLATFORM_TYPE: &str = "E5";
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum TcbUpdateType {
@@ -165,20 +145,16 @@ fn parse_fmspcs_response(body: &str) -> Result<Vec<String>> {
     Ok(fmspcs)
 }
 
-async fn fetch_fmspcs(
-    http_client: &reqwest::Client,
-    base_url: &Url,
-    platform: FmspcPlatform,
-) -> Result<Vec<String>> {
+async fn fetch_fmspcs(http_client: &reqwest::Client, base_url: &Url) -> Result<Vec<String>> {
     let mut url = base_url.join("fmspcs")?;
-    let platform = platform.as_query_value();
-    url.query_pairs_mut().append_pair("platform", platform);
+    url.query_pairs_mut()
+        .append_pair("platform", FMSPC_PLATFORM_TYPE);
     let body = send_pcs_request(http_client, http_client.get(url))
         .await?
         .text()
         .await?;
     parse_fmspcs_response(&body)
-        .with_context(|| format!("failed to fetch FMSPCs for platform={platform}"))
+        .with_context(|| format!("failed to fetch FMSPCs for platform={FMSPC_PLATFORM_TYPE}"))
 }
 
 fn verify_crl(crl_der: &[u8], signer_der: &[u8], description: &str) -> Result<()> {
@@ -341,7 +317,6 @@ fn remove_empty_identity_placeholders(output: &mut Value) {
 #[instrument(skip(fmspcs, output_file))]
 pub async fn fetch_collateral(
     fmspcs: Vec<String>,
-    platform: FmspcPlatform,
     tcb_update_type: TcbUpdateType,
     output_file: PathBuf,
 ) -> Result<()> {
@@ -350,11 +325,8 @@ pub async fn fetch_collateral(
     let http_client = build_pcs_http_client()?;
     let mut output = initial_output();
     let fmspcs = if fmspcs.is_empty() {
-        info!(
-            platform = platform.as_query_value(),
-            "Fetching Intel PCS FMSPCs"
-        );
-        fetch_fmspcs(&http_client, &base_url, platform).await?
+        info!(platform = FMSPC_PLATFORM_TYPE, "Fetching Intel PCS FMSPCs");
+        fetch_fmspcs(&http_client, &base_url).await?
     } else {
         fmspcs
     };
