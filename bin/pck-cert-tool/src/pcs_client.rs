@@ -17,11 +17,21 @@ use x509_parser::pem::Pem;
 use x509_parser::prelude::{parse_x509_certificate, parse_x509_pem};
 use x509_parser::x509::SubjectPublicKeyInfo;
 
-/// Intel PCS API base URL (with trailing slash for proper join behavior).
-const INTEL_PCS_API_BASE_URL: &str = "https://api.trustedservices.intel.com/sgx/certification/v4/";
+/// Intel PCS API version used by this client.
+pub const INTEL_PCS_API_VERSION: u8 = 4;
 
-pub static PCS_BASE_URL: LazyLock<Url> =
-    LazyLock::new(|| Url::parse(INTEL_PCS_API_BASE_URL).expect("Invalid Intel PCS API base URL"));
+const INTEL_PCS_API_HOST: &str = "https://api.trustedservices.intel.com/";
+
+fn pcs_base_url(environment: &str) -> Url {
+    let host = Url::parse(INTEL_PCS_API_HOST).expect("Invalid Intel PCS API host");
+    host.join(&format!(
+        "{environment}/certification/v{INTEL_PCS_API_VERSION}/"
+    ))
+    .expect("Invalid Intel PCS API base URL")
+}
+
+pub static PCS_BASE_SGX_URL: LazyLock<Url> = LazyLock::new(|| pcs_base_url("sgx"));
+pub static PCS_BASE_TDX_URL: LazyLock<Url> = LazyLock::new(|| pcs_base_url("tdx"));
 
 pub const PCK_CERTIFICATE_ISSUER_CHAIN: &str = "SGX-PCK-Certificate-Issuer-Chain";
 pub const PCK_CRL_ISSUER_CHAIN: &str = "SGX-PCK-CRL-Issuer-Chain";
@@ -327,7 +337,7 @@ async fn fetch_pck_certs(
     request_body: &PckCertsRequest,
 ) -> Result<PckCertsResponse> {
     // Make POST request to Intel PCS API
-    let url = PCS_BASE_URL
+    let url = PCS_BASE_SGX_URL
         .join(INTEL_PCS_PCKCERTS_ENDPOINT)
         .context("Failed to construct PCK certs URL")?;
 
@@ -349,9 +359,9 @@ async fn fetch_pck_certs(
 
     let cert_chain = response
         .headers()
-        .get(PCK_CERTIFICATE_ISSUER_CHAIN)
+        .get("SGX-PCK-Certificate-Issuer-Chain")
         .and_then(|v| v.to_str().ok())
-        .context(format!("Missing {} header", PCK_CERTIFICATE_ISSUER_CHAIN))?
+        .context("Missing SGX-PCK-Certificate-Issuer-Chain header")?
         .to_string();
 
     info!(fmspc = %fmspc, "Received PCK certificates");
@@ -389,7 +399,7 @@ pub async fn fetch_pcm(
     api_key: Option<&str>,
     platform_manifest: &str,
 ) -> Result<PcmResponse> {
-    let url = PCS_BASE_URL
+    let url = PCS_BASE_SGX_URL
         .join(INTEL_PCS_PCM_ENDPOINT)
         .context("Failed to construct PCM URL")?;
 
@@ -419,7 +429,7 @@ pub async fn fetch_pcm(
 }
 
 /// Validates an FMSPC value before it's used in the TCB Info query and as a label value.
-fn validate_fmspc(fmspc: &str) -> Result<()> {
+pub(crate) fn validate_fmspc(fmspc: &str) -> Result<()> {
     anyhow::ensure!(
         is_fixed_len_hex::<FMSPC_HEX_LEN>(fmspc),
         "Invalid SGX-FMSPC: expected a {FMSPC_HEX_LEN}-character hex string, got {} bytes",
@@ -433,7 +443,7 @@ fn validate_fmspc(fmspc: &str) -> Result<()> {
 async fn fetch_tcb_info(http_client: &reqwest::Client, fmspc: &str) -> Result<TcbInfoResponse> {
     validate_fmspc(fmspc)?;
     info!(fmspc = %fmspc, "Fetching SGX TCB Info");
-    let mut tcb_url = PCS_BASE_URL
+    let mut tcb_url = PCS_BASE_SGX_URL
         .join(INTEL_PCS_TCB_ENDPOINT)
         .context("Failed to construct TCB URL")?;
 
@@ -447,12 +457,9 @@ async fn fetch_tcb_info(http_client: &reqwest::Client, fmspc: &str) -> Result<Tc
 
     let issuer_chain = response
         .headers()
-        .get(TCB_INFO_ISSUER_CHAIN)
+        .get("TCB-Info-Issuer-Chain")
         .and_then(|v| v.to_str().ok())
-        .context(format!(
-            "Missing {} header in TCB info response",
-            TCB_INFO_ISSUER_CHAIN
-        ))?
+        .context("Missing TCB-Info-Issuer-Chain header in TCB info response")?
         .to_string();
 
     let body = response

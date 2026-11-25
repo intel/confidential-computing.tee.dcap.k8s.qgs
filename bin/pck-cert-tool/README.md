@@ -239,8 +239,6 @@ If `--fmspc` is omitted, the command retrieves all available FMSPCs from PCS.
       --output_file platform_collaterals.json
     ```
 
-**Note:** Because this mode retrieves only public collateral, it does not require an Intel PCS API subscription key or platform registration input.
-
 ## Secret Data Format
 
 The created secret will be named using the QE ID value and contain the following keys in stringData:

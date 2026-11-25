@@ -4,10 +4,10 @@
 //! Fetches the public Intel PCS collateral.
 
 use crate::pcs_client::{
-    ECDSA_P256_SIGNATURE_LEN, ENCLAVE_IDENTITY_ISSUER_CHAIN, FMSPC_HEX_LEN,
-    PCK_CERTIFICATE_ISSUER_CHAIN, PCK_CRL_ISSUER_CHAIN, TCB_INFO_ISSUER_CHAIN,
+    ECDSA_P256_SIGNATURE_LEN, ENCLAVE_IDENTITY_ISSUER_CHAIN, INTEL_PCS_API_VERSION,
+    PCK_CERTIFICATE_ISSUER_CHAIN, PCK_CRL_ISSUER_CHAIN, TCB_INFO_ISSUER_CHAIN, TcbInfoResponse,
     build_pcs_http_client, decode_and_validate_issuer_chain, send_pcs_request,
-    send_pcs_request_allowing_status, verify_tcb_info,
+    send_pcs_request_allowing_status, validate_fmspc, verify_tcb_info,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use serde::Deserialize;
@@ -20,30 +20,18 @@ use url::Url;
 use x509_parser::extensions::{DistributionPointName, GeneralName, ParsedExtension};
 use x509_parser::prelude::{parse_x509_certificate, parse_x509_crl};
 
-const PCS_API_VERSION: u8 = 4;
-
 /// E5 - multi-socket server platforms supporting DCAP attestation (examples include but may not be limited to: Intel® Xeon® D and Intel® Xeon® Scalable)
 const FMSPC_PLATFORM_TYPE: &str = "E5";
 const TCB_UPDATE_TYPES: &[&str] = &["standard", "early"];
 
 pub fn parse_fmspc(value: &str) -> std::result::Result<String, String> {
-    if value.len() != FMSPC_HEX_LEN || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(format!(
-            "invalid FMSPC {value:?}: expected exactly {FMSPC_HEX_LEN} hexadecimal characters"
-        ));
-    }
+    validate_fmspc(value).map_err(|error| format!("invalid FMSPC {value:?}: {error}"))?;
     Ok(value.to_ascii_uppercase())
 }
 
 #[derive(Debug)]
 struct PckCrlResponse {
     body: Vec<u8>,
-    issuer_chain: String,
-}
-
-#[derive(Debug)]
-struct SignedJsonResponse {
-    body: String,
     issuer_chain: String,
 }
 
@@ -56,7 +44,7 @@ fn header(response: &reqwest::Response, name: &str) -> Result<String> {
     response
         .headers()
         .get(name)
-        .with_context(|| format!("PCS response is missing {name}"))?
+        .with_context(|| format!("PCS response header is missing {name}"))?
         .to_str()
         .with_context(|| format!("PCS response header {name} is not valid text"))
         .map(str::to_owned)
@@ -81,19 +69,19 @@ async fn fetch_signed_json(
     http_client: &reqwest::Client,
     url: &Url,
     issuer_chain_header: &str,
-) -> Result<SignedJsonResponse> {
+) -> Result<TcbInfoResponse> {
     let response = send_pcs_request(http_client, http_client.get(url.clone())).await?;
     let issuer_chain = header(&response, issuer_chain_header)?;
     let body = response.text().await?;
     serde_json::from_str::<Value>(&body).context("PCS returned invalid collateral JSON")?;
-    Ok(SignedJsonResponse { body, issuer_chain })
+    Ok(TcbInfoResponse { body, issuer_chain })
 }
 
 async fn fetch_optional_signed_json(
     http_client: &reqwest::Client,
     url: &Url,
     issuer_chain_header: &str,
-) -> Result<Option<SignedJsonResponse>> {
+) -> Result<Option<TcbInfoResponse>> {
     let response = send_pcs_request_allowing_status(
         http_client,
         http_client.get(url.clone()),
@@ -106,7 +94,7 @@ async fn fetch_optional_signed_json(
     let issuer_chain = header(&response, issuer_chain_header)?;
     let body = response.text().await?;
     serde_json::from_str::<Value>(&body).context("PCS returned invalid collateral JSON")?;
-    Ok(Some(SignedJsonResponse { body, issuer_chain }))
+    Ok(Some(TcbInfoResponse { body, issuer_chain }))
 }
 
 fn parse_fmspcs_response(body: &str) -> Result<Vec<String>> {
@@ -167,17 +155,6 @@ fn root_crl_url(root_der: &[u8]) -> Result<String> {
     bail!("Intel SGX Root CA certificate has no CRL distribution point URI")
 }
 
-fn tdx_base_url(sgx_base_url: &Url) -> Result<Url> {
-    let path = sgx_base_url.path();
-    let tdx_path = path.replace("/sgx/", "/tdx/").replace("/sgx", "/tdx");
-    if tdx_path == path {
-        bail!("PCS base URL path must contain an SGX component");
-    }
-    let mut url = sgx_base_url.clone();
-    url.set_path(&tdx_path);
-    Ok(url)
-}
-
 fn update_url(base_url: &Url, path: &str, update: &str) -> Result<Url> {
     let mut url = base_url.join(path)?;
     url.query_pairs_mut().append_pair("update", update);
@@ -200,7 +177,7 @@ fn ensure_consistent_chain(
 }
 
 fn verified_tcb_info_value(
-    response: &SignedJsonResponse,
+    response: &TcbInfoResponse,
     pck_issuer_chain: &str,
     fmspc: &str,
 ) -> Result<Value> {
@@ -217,7 +194,7 @@ fn verified_tcb_info_value(
     Ok(value)
 }
 
-fn verified_identity_value(response: &SignedJsonResponse, pck_issuer_chain: &str) -> Result<Value> {
+fn verified_identity_value(response: &TcbInfoResponse, pck_issuer_chain: &str) -> Result<Value> {
     verify_enclave_identity(&response.body, &response.issuer_chain, pck_issuer_chain)?;
     let value = serde_json::from_str::<Value>(&response.body)?;
     let serialized = serde_json::to_string(&value)?;
@@ -266,7 +243,7 @@ fn initial_output() -> Value {
     json!({
         "platforms": [],
         "collaterals": {
-            "version": PCS_API_VERSION,
+            "version": INTEL_PCS_API_VERSION,
             "pck_certs": [],
             "tcbinfos": [],
             "pckcacrl": {},
@@ -296,8 +273,8 @@ fn remove_empty_identity_placeholders(output: &mut Value) {
 
 #[instrument(skip(fmspcs, output_file))]
 pub async fn fetch_collateral(fmspcs: Vec<String>, output_file: PathBuf) -> Result<()> {
-    let base_url = crate::pcs_client::PCS_BASE_URL.clone();
-    let tdx_url = tdx_base_url(&base_url)?;
+    let base_url = crate::pcs_client::PCS_BASE_SGX_URL.clone();
+    let tdx_url = crate::pcs_client::PCS_BASE_TDX_URL.clone();
     let http_client = build_pcs_http_client()?;
     let mut output = initial_output();
     let fmspcs = if fmspcs.is_empty() {
