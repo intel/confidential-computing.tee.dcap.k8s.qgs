@@ -10,7 +10,6 @@ use crate::pcs_client::{
     send_pcs_request_allowing_status, verify_tcb_info,
 };
 use anyhow::{Context, Result, anyhow, bail};
-use clap::ValueEnum;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
@@ -25,26 +24,7 @@ const PCS_API_VERSION: u8 = 4;
 
 /// E5 - multi-socket server platforms supporting DCAP attestation (examples include but may not be limited to: Intel® Xeon® D and Intel® Xeon® Scalable)
 const FMSPC_PLATFORM_TYPE: &str = "E5";
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-pub enum TcbUpdateType {
-    #[value(name = "standard")]
-    Standard,
-    #[value(name = "early")]
-    Early,
-    #[value(name = "all")]
-    All,
-}
-
-impl TcbUpdateType {
-    fn updates(self) -> &'static [&'static str] {
-        match self {
-            Self::Standard => &["standard"],
-            Self::Early => &["early"],
-            Self::All => &["standard", "early"],
-        }
-    }
-}
+const TCB_UPDATE_TYPES: &[&str] = &["standard", "early"];
 
 pub fn parse_fmspc(value: &str) -> std::result::Result<String, String> {
     if value.len() != FMSPC_HEX_LEN || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
@@ -315,11 +295,7 @@ fn remove_empty_identity_placeholders(output: &mut Value) {
 }
 
 #[instrument(skip(fmspcs, output_file))]
-pub async fn fetch_collateral(
-    fmspcs: Vec<String>,
-    tcb_update_type: TcbUpdateType,
-    output_file: PathBuf,
-) -> Result<()> {
+pub async fn fetch_collateral(fmspcs: Vec<String>, output_file: PathBuf) -> Result<()> {
     let base_url = crate::pcs_client::PCS_BASE_URL.clone();
     let tdx_url = tdx_base_url(&base_url)?;
     let http_client = build_pcs_http_client()?;
@@ -363,7 +339,7 @@ pub async fn fetch_collateral(
 
         let mut tcbinfo = Map::new();
         tcbinfo.insert("fmspc".into(), Value::String(fmspc.clone()));
-        for update in tcb_update_type.updates() {
+        for update in TCB_UPDATE_TYPES {
             let key_suffix = if *update == "early" { "_early" } else { "" };
 
             let mut tdx_tcb_url = tdx_url.join("tcb")?;
@@ -387,7 +363,7 @@ pub async fn fetch_collateral(
     }
 
     let mut enclave_issuer_chain = None;
-    for update in tcb_update_type.updates() {
+    for update in TCB_UPDATE_TYPES {
         info!(update, "Fetching Intel TDQE identity");
         let url = update_url(&tdx_url, "qe/identity", update)?;
         let identity = fetch_signed_json(&http_client, &url, ENCLAVE_IDENTITY_ISSUER_CHAIN).await?;

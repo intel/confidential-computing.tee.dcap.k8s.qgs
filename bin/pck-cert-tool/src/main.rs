@@ -16,7 +16,7 @@ use kube::{
 };
 use pck_cert_tool::FIELD_MANAGER;
 use pck_cert_tool::cache::parse_cache_blob;
-use pck_cert_tool::collateral::{TcbUpdateType, fetch_collateral, parse_fmspc};
+use pck_cert_tool::collateral::{fetch_collateral, parse_fmspc};
 use pck_cert_tool::pck_secret::{
     create_pck_secret, patch_piid_index, pck_secret_is_valid, pck_secret_name,
 };
@@ -71,7 +71,7 @@ enum Commands {
     Register(RegisterArgs),
     /// Readiness/liveness probe helpers (exit 0 = ok, 1 = not ok)
     Probe(ProbeArgs),
-    /// Fetch public Intel PCS collateral for Trustee offline provisioning
+    /// Fetch public Intel PCS validation collateral
     Fetch(FetchCollateralArgs),
 }
 
@@ -162,17 +162,7 @@ pub struct FetchCollateralArgs {
     )]
     pub fmspc: Vec<String>,
 
-    /// Type of TCB info and enclave identity update to retrieve.
-    #[arg(
-        short = 't',
-        long = "tcb_update_type",
-        visible_alias = "tcb-update-type",
-        value_enum,
-        default_value = "standard"
-    )]
-    pub tcb_update_type: TcbUpdateType,
-
-    /// Trustee-compatible collateral JSON output file.
+    /// Verification collateral JSON output file.
     #[arg(
         short = 'o',
         long = "output_file",
@@ -885,12 +875,7 @@ async fn main() -> Result<()> {
             }
         },
         Commands::Fetch(fetch_args) => {
-            fetch_collateral(
-                fetch_args.fmspc,
-                fetch_args.tcb_update_type,
-                fetch_args.output_file,
-            )
-            .await?;
+            fetch_collateral(fetch_args.fmspc, fetch_args.output_file).await?;
         }
     }
 

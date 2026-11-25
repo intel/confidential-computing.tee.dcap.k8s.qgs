@@ -204,6 +204,11 @@ processor and platform PCK CRLs, the Intel SGX Root CA CRL, and all associated i
 PCS signatures, certificate chains, and CRL signatures are verified before the output file is written.
 
 ```bash
+# Fetch collateral for all available FMSPCs and write to a JSON file.
+./target/release/pck-cert-tool fetch \
+  --output-file platform_collaterals.json
+  
+# Fetch collateral for two FMSPCs and write to a JSON file.
 ./target/release/pck-cert-tool fetch \
   --fmspc 00A06D080000 \
   --fmspc 70A06D070000 \
@@ -214,34 +219,25 @@ PCS signatures, certificate chains, and CRL signatures are verified before the o
 Values must be exactly 12 hexadecimal characters and are normalized to uppercase. 
 If `--fmspc` is omitted, the command retrieves all available FMSPCs from PCS.
 
-Use `--platform` (`-p`) with `all`, `client`, `E3`, or `E5` to restrict automatic FMSPC discovery. 
-Explicit `--fmspc` values take precedence over `--platform`.
+#### Fetch for offline clusters
 
-Use `--tcb_update_type` (`-t`) with `standard`, `early`, or `all`.
+1. Get the FMSPCs from the offline cluster:
+    ```bash
+    fmspcs=$(
+      kubectl get secrets \
+        -n intel-dcap-operator-system \
+        -l fmspc \
+        -o jsonpath='{range .items[*]}{.metadata.labels.fmspc}{","}{end}' |
+      sed 's/,$//'
+    )
+    ```
 
-```bash
-./target/release/pck-cert-tool fetch \
-  -p E5 \
-  -t early \
-  --output-file platform_collaterals.json
-```
-
-Fetch with available FMSPCs from the cluster's `intel-dcap-operator-system` namespace:
-
-```bash
-fmspcs=$(
-  kubectl get secrets \
-    -n intel-dcap-operator-system \
-    -l fmspc \
-    -o jsonpath='{range .items[*]}{.metadata.labels.fmspc}{","}{end}' |
-  sed 's/,$//'
-)
-
-./target/release/pck-cert-tool fetch \
-  --fmspc "$fmspcs" \
-  --tcb_update_type early \
-  --output_file platform_collaterals.json
-```
+2. Fetch the collateral on a node with Intel PCS access and write to a JSON file:
+    ```bash
+    ./target/release/pck-cert-tool fetch \
+      --fmspc "$fmspcs" \
+      --output_file platform_collaterals.json
+    ```
 
 **Note:** Because this mode retrieves only public collateral, it does not require an Intel PCS API subscription key or platform registration input.
 
