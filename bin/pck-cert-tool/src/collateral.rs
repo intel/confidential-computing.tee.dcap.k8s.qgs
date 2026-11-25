@@ -6,7 +6,8 @@
 use crate::pcs_client::{
     ECDSA_P256_SIGNATURE_LEN, ENCLAVE_IDENTITY_ISSUER_CHAIN, FMSPC_HEX_LEN,
     PCK_CERTIFICATE_ISSUER_CHAIN, PCK_CRL_ISSUER_CHAIN, TCB_INFO_ISSUER_CHAIN,
-    build_pcs_http_client, decode_and_validate_issuer_chain, verify_tcb_info,
+    build_pcs_http_client, decode_and_validate_issuer_chain, send_pcs_request,
+    send_pcs_request_allowing_status, verify_tcb_info,
 };
 use anyhow::{Context, Result, anyhow, bail};
 use clap::ValueEnum;
@@ -101,16 +102,6 @@ fn header(response: &reqwest::Response, name: &str) -> Result<String> {
         .map(str::to_owned)
 }
 
-async fn successful_response(response: reqwest::Response, url: &Url) -> Result<reqwest::Response> {
-    if response.status().is_success() {
-        return Ok(response);
-    }
-
-    let status = response.status();
-    let body = response.text().await.unwrap_or_default();
-    bail!("PCS request to {url} failed with HTTP {status}: {body}");
-}
-
 async fn fetch_pck_crl(
     http_client: &reqwest::Client,
     base_url: &Url,
@@ -120,12 +111,7 @@ async fn fetch_pck_crl(
     url.query_pairs_mut()
         .append_pair("ca", ca)
         .append_pair("encoding", "der");
-    let response = http_client
-        .get(url.clone())
-        .send()
-        .await
-        .with_context(|| format!("HTTP GET to {url} failed"))?;
-    let response = successful_response(response, &url).await?;
+    let response = send_pcs_request(http_client, http_client.get(url.clone())).await?;
     let issuer_chain = header(&response, PCK_CRL_ISSUER_CHAIN)?;
     let body = response.bytes().await?.to_vec();
     Ok(PckCrlResponse { body, issuer_chain })
@@ -136,12 +122,7 @@ async fn fetch_signed_json(
     url: &Url,
     issuer_chain_header: &str,
 ) -> Result<SignedJsonResponse> {
-    let response = http_client
-        .get(url.clone())
-        .send()
-        .await
-        .with_context(|| format!("HTTP GET to {url} failed"))?;
-    let response = successful_response(response, url).await?;
+    let response = send_pcs_request(http_client, http_client.get(url.clone())).await?;
     let issuer_chain = header(&response, issuer_chain_header)?;
     let body = response.text().await?;
     serde_json::from_str::<Value>(&body).context("PCS returned invalid collateral JSON")?;
@@ -153,15 +134,15 @@ async fn fetch_optional_signed_json(
     url: &Url,
     issuer_chain_header: &str,
 ) -> Result<Option<SignedJsonResponse>> {
-    let response = http_client
-        .get(url.clone())
-        .send()
-        .await
-        .with_context(|| format!("HTTP GET to {url} failed"))?;
+    let response = send_pcs_request_allowing_status(
+        http_client,
+        http_client.get(url.clone()),
+        reqwest::StatusCode::NOT_FOUND,
+    )
+    .await?;
     if response.status() == reqwest::StatusCode::NOT_FOUND {
         return Ok(None);
     }
-    let response = successful_response(response, url).await?;
     let issuer_chain = header(&response, issuer_chain_header)?;
     let body = response.text().await?;
     serde_json::from_str::<Value>(&body).context("PCS returned invalid collateral JSON")?;
@@ -192,12 +173,10 @@ async fn fetch_fmspcs(
     let mut url = base_url.join("fmspcs")?;
     let platform = platform.as_query_value();
     url.query_pairs_mut().append_pair("platform", platform);
-    let response = http_client
-        .get(url.clone())
-        .send()
-        .await
-        .with_context(|| format!("HTTP GET to {url} failed"))?;
-    let body = successful_response(response, &url).await?.text().await?;
+    let body = send_pcs_request(http_client, http_client.get(url))
+        .await?
+        .text()
+        .await?;
     parse_fmspcs_response(&body)
         .with_context(|| format!("failed to fetch FMSPCs for platform={platform}"))
 }
@@ -398,12 +377,7 @@ pub async fn fetch_collateral(
 
     let root_crl_cdp = root_crl_url(&root_der)?;
     let root_crl_url = Url::parse(&root_crl_cdp)?;
-    let root_crl_response = http_client
-        .get(root_crl_url.clone())
-        .send()
-        .await
-        .with_context(|| format!("HTTP GET to {root_crl_url} failed"))?;
-    let root_crl = successful_response(root_crl_response, &root_crl_url)
+    let root_crl = send_pcs_request(&http_client, http_client.get(root_crl_url))
         .await?
         .bytes()
         .await?

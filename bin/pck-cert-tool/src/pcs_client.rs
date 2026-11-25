@@ -280,6 +280,45 @@ async fn handle_pcs_api_error(response: reqwest::Response, url: &str) -> anyhow:
     })
 }
 
+/// Sends a PCS HTTP request and returns only successful responses.
+pub async fn send_pcs_request(
+    http_client: &reqwest::Client,
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response> {
+    send_pcs_request_with_allowed_status(http_client, request, None).await
+}
+
+/// Sends a PCS HTTP request, additionally allowing one expected non-success status.
+pub async fn send_pcs_request_allowing_status(
+    http_client: &reqwest::Client,
+    request: reqwest::RequestBuilder,
+    allowed_status: reqwest::StatusCode,
+) -> Result<reqwest::Response> {
+    send_pcs_request_with_allowed_status(http_client, request, Some(allowed_status)).await
+}
+
+async fn send_pcs_request_with_allowed_status(
+    http_client: &reqwest::Client,
+    request: reqwest::RequestBuilder,
+    allowed_status: Option<reqwest::StatusCode>,
+) -> Result<reqwest::Response> {
+    let request = request
+        .build()
+        .context("Failed to build PCS HTTP request")?;
+    let method = request.method().clone();
+    let url = request.url().clone();
+    let response = http_client
+        .execute(request)
+        .await
+        .with_context(|| format!("HTTP {method} to {url} failed"))?;
+
+    if response.status().is_success() || allowed_status == Some(response.status()) {
+        return Ok(response);
+    }
+
+    Err(handle_pcs_api_error(response, url.as_str()).await)
+}
+
 /// Fetch PCK Certificates.
 #[instrument(skip(http_client, api_key, request_body))]
 async fn fetch_pck_certs(
@@ -297,15 +336,7 @@ async fn fetch_pck_certs(
         request = request.header("Ocp-Apim-Subscription-Key", key);
     }
 
-    let response = request
-        .send()
-        .await
-        .with_context(|| format!("HTTP POST to {url} failed"))?;
-
-    // Check response status
-    if !response.status().is_success() {
-        return Err(handle_pcs_api_error(response, url.as_str()).await);
-    }
+    let response = send_pcs_request(http_client, request).await?;
 
     // Extract SGX-FMSPC and PCK certificate issuer chain headers
     let fmspc = response
@@ -368,14 +399,7 @@ pub async fn fetch_pcm(
         request = request.header("Ocp-Apim-Subscription-Key", key);
     }
 
-    let response = request
-        .send()
-        .await
-        .with_context(|| format!("HTTP POST to {url} failed"))?;
-
-    if !response.status().is_success() {
-        return Err(handle_pcs_api_error(response, url.as_str()).await);
-    }
+    let response = send_pcs_request(http_client, request).await?;
 
     let issuer_chain = response
         .headers()
@@ -419,16 +443,7 @@ async fn fetch_tcb_info(http_client: &reqwest::Client, fmspc: &str) -> Result<Tc
         urlencoding::encode(fmspc)
     )));
 
-    let response = http_client
-        .get(tcb_url.as_str())
-        .send()
-        .await
-        .with_context(|| format!("HTTP GET to {tcb_url} failed"))?;
-
-    // Check TCB response status
-    if !response.status().is_success() {
-        return Err(handle_pcs_api_error(response, tcb_url.as_str()).await);
-    }
+    let response = send_pcs_request(http_client, http_client.get(tcb_url.as_str())).await?;
 
     let issuer_chain = response
         .headers()
