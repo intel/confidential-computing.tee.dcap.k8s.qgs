@@ -196,6 +196,49 @@ The command will:
 5. Continue watching for updates to the secret
 6. Rewrite the file whenever the secret is updated with valid content
 
+### fetch command
+
+Fetch the public Intel PCS v4 collateral.
+The command retrieves TDX TCB Info for each TDX-capable selected FMSPC, the TDQE identity,
+processor and platform PCK CRLs, the Intel SGX Root CA CRL, and all associated issuer chains.
+PCS signatures, certificate chains, and CRL signatures are verified before the output file is written.
+
+```bash
+# Fetch collateral for all available FMSPCs and write to a JSON file.
+./target/release/pck-cert-tool fetch \
+  --output-file platform_collaterals.json
+  
+# Fetch collateral for two FMSPCs and write to a JSON file.
+./target/release/pck-cert-tool fetch \
+  --fmspc 00A06D080000 \
+  --fmspc 70A06D070000 \
+  --output_file platform_collaterals.json
+```
+
+`--fmspc` may be repeated or supplied as a comma-separated list.
+Values must be exactly 12 hexadecimal characters and are normalized to uppercase. 
+If `--fmspc` is omitted, the command retrieves all available FMSPCs from PCS.
+
+#### Fetch for offline clusters
+
+1. Get the FMSPCs from the offline cluster:
+    ```bash
+    fmspcs=$(
+      kubectl get secrets \
+        -n intel-dcap-operator-system \
+        -l fmspc \
+        -o jsonpath='{range .items[*]}{.metadata.labels.fmspc}{","}{end}' |
+      sed 's/,$//'
+    )
+    ```
+
+2. Fetch the collateral on a node with Intel PCS access and write to a JSON file:
+    ```bash
+    ./target/release/pck-cert-tool fetch \
+      --fmspc "$fmspcs" \
+      --output_file platform_collaterals.json
+    ```
+
 ## Secret Data Format
 
 The created secret will be named using the QE ID value and contain the following keys in stringData:

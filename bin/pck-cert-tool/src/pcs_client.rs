@@ -17,11 +17,26 @@ use x509_parser::pem::Pem;
 use x509_parser::prelude::{parse_x509_certificate, parse_x509_pem};
 use x509_parser::x509::SubjectPublicKeyInfo;
 
-/// Intel PCS API base URL (with trailing slash for proper join behavior).
-const INTEL_PCS_API_BASE_URL: &str = "https://api.trustedservices.intel.com/sgx/certification/v4/";
+/// Intel PCS API version used by this client.
+pub const INTEL_PCS_API_VERSION: u8 = 4;
 
-static PCS_BASE_URL: LazyLock<Url> =
-    LazyLock::new(|| Url::parse(INTEL_PCS_API_BASE_URL).expect("Invalid Intel PCS API base URL"));
+const INTEL_PCS_API_HOST: &str = "https://api.trustedservices.intel.com/";
+
+fn pcs_base_url(environment: &str) -> Url {
+    let host = Url::parse(INTEL_PCS_API_HOST).expect("Invalid Intel PCS API host");
+    host.join(&format!(
+        "{environment}/certification/v{INTEL_PCS_API_VERSION}/"
+    ))
+    .expect("Invalid Intel PCS API base URL")
+}
+
+pub static PCS_BASE_SGX_URL: LazyLock<Url> = LazyLock::new(|| pcs_base_url("sgx"));
+pub static PCS_BASE_TDX_URL: LazyLock<Url> = LazyLock::new(|| pcs_base_url("tdx"));
+
+pub const PCK_CERTIFICATE_ISSUER_CHAIN: &str = "SGX-PCK-Certificate-Issuer-Chain";
+pub const PCK_CRL_ISSUER_CHAIN: &str = "SGX-PCK-CRL-Issuer-Chain";
+pub const TCB_INFO_ISSUER_CHAIN: &str = "TCB-Info-Issuer-Chain";
+pub const ENCLAVE_IDENTITY_ISSUER_CHAIN: &str = "SGX-Enclave-Identity-Issuer-Chain";
 
 /// Intel PCS API endpoint for PCK certificates with CPU SVN.
 const INTEL_PCS_PCKCERTS_ENDPOINT: &str = "pckcerts/config";
@@ -275,6 +290,45 @@ async fn handle_pcs_api_error(response: reqwest::Response, url: &str) -> anyhow:
     })
 }
 
+/// Sends a PCS HTTP request and returns only successful responses.
+pub async fn send_pcs_request(
+    http_client: &reqwest::Client,
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response> {
+    send_pcs_request_with_allowed_status(http_client, request, None).await
+}
+
+/// Sends a PCS HTTP request, additionally allowing one expected non-success status.
+pub async fn send_pcs_request_allowing_status(
+    http_client: &reqwest::Client,
+    request: reqwest::RequestBuilder,
+    allowed_status: reqwest::StatusCode,
+) -> Result<reqwest::Response> {
+    send_pcs_request_with_allowed_status(http_client, request, Some(allowed_status)).await
+}
+
+async fn send_pcs_request_with_allowed_status(
+    http_client: &reqwest::Client,
+    request: reqwest::RequestBuilder,
+    allowed_status: Option<reqwest::StatusCode>,
+) -> Result<reqwest::Response> {
+    let request = request
+        .build()
+        .context("Failed to build PCS HTTP request")?;
+    let method = request.method().clone();
+    let url = request.url().clone();
+    let response = http_client
+        .execute(request)
+        .await
+        .with_context(|| format!("HTTP {method} to {url} failed"))?;
+
+    if response.status().is_success() || allowed_status == Some(response.status()) {
+        return Ok(response);
+    }
+
+    Err(handle_pcs_api_error(response, url.as_str()).await)
+}
+
 /// Fetch PCK Certificates.
 #[instrument(skip(http_client, api_key, request_body))]
 async fn fetch_pck_certs(
@@ -283,7 +337,7 @@ async fn fetch_pck_certs(
     request_body: &PckCertsRequest,
 ) -> Result<PckCertsResponse> {
     // Make POST request to Intel PCS API
-    let url = PCS_BASE_URL
+    let url = PCS_BASE_SGX_URL
         .join(INTEL_PCS_PCKCERTS_ENDPOINT)
         .context("Failed to construct PCK certs URL")?;
 
@@ -292,15 +346,7 @@ async fn fetch_pck_certs(
         request = request.header("Ocp-Apim-Subscription-Key", key);
     }
 
-    let response = request
-        .send()
-        .await
-        .with_context(|| format!("HTTP POST to {url} failed"))?;
-
-    // Check response status
-    if !response.status().is_success() {
-        return Err(handle_pcs_api_error(response, url.as_str()).await);
-    }
+    let response = send_pcs_request(http_client, request).await?;
 
     // Extract SGX-FMSPC and PCK certificate issuer chain headers
     let fmspc = response
@@ -353,7 +399,7 @@ pub async fn fetch_pcm(
     api_key: Option<&str>,
     platform_manifest: &str,
 ) -> Result<PcmResponse> {
-    let url = PCS_BASE_URL
+    let url = PCS_BASE_SGX_URL
         .join(INTEL_PCS_PCM_ENDPOINT)
         .context("Failed to construct PCM URL")?;
 
@@ -363,14 +409,7 @@ pub async fn fetch_pcm(
         request = request.header("Ocp-Apim-Subscription-Key", key);
     }
 
-    let response = request
-        .send()
-        .await
-        .with_context(|| format!("HTTP POST to {url} failed"))?;
-
-    if !response.status().is_success() {
-        return Err(handle_pcs_api_error(response, url.as_str()).await);
-    }
+    let response = send_pcs_request(http_client, request).await?;
 
     let issuer_chain = response
         .headers()
@@ -390,7 +429,7 @@ pub async fn fetch_pcm(
 }
 
 /// Validates an FMSPC value before it's used in the TCB Info query and as a label value.
-fn validate_fmspc(fmspc: &str) -> Result<()> {
+pub(crate) fn validate_fmspc(fmspc: &str) -> Result<()> {
     anyhow::ensure!(
         is_fixed_len_hex::<FMSPC_HEX_LEN>(fmspc),
         "Invalid SGX-FMSPC: expected a {FMSPC_HEX_LEN}-character hex string, got {} bytes",
@@ -404,7 +443,7 @@ fn validate_fmspc(fmspc: &str) -> Result<()> {
 async fn fetch_tcb_info(http_client: &reqwest::Client, fmspc: &str) -> Result<TcbInfoResponse> {
     validate_fmspc(fmspc)?;
     info!(fmspc = %fmspc, "Fetching SGX TCB Info");
-    let mut tcb_url = PCS_BASE_URL
+    let mut tcb_url = PCS_BASE_SGX_URL
         .join(INTEL_PCS_TCB_ENDPOINT)
         .context("Failed to construct TCB URL")?;
 
@@ -414,16 +453,7 @@ async fn fetch_tcb_info(http_client: &reqwest::Client, fmspc: &str) -> Result<Tc
         urlencoding::encode(fmspc)
     )));
 
-    let response = http_client
-        .get(tcb_url.as_str())
-        .send()
-        .await
-        .with_context(|| format!("HTTP GET to {tcb_url} failed"))?;
-
-    // Check TCB response status
-    if !response.status().is_success() {
-        return Err(handle_pcs_api_error(response, tcb_url.as_str()).await);
-    }
+    let response = send_pcs_request(http_client, http_client.get(tcb_url.as_str())).await?;
 
     let issuer_chain = response
         .headers()
@@ -469,7 +499,7 @@ struct SignedTcbInfo<'a> {
 }
 
 /// Length of an ECDSA P-256 signature in the fixed r||s encoding.
-const ECDSA_P256_SIGNATURE_LEN: usize = 64;
+pub(crate) const ECDSA_P256_SIGNATURE_LEN: usize = 64;
 
 /// Length of an ECDSA P-384 signature in the fixed r||s encoding.
 const ECDSA_P384_SIGNATURE_LEN: usize = 96;
@@ -494,7 +524,7 @@ fn verify_certificate(cert_pem: &str, issuer_spki: &SubjectPublicKeyInfo<'_>) ->
 /// Decodes a URL-encoded PEM issuer chain as returned in Intel PCS response headers and
 /// validates its structure: exactly two certificates, one self-signed Root CA and one
 /// certificate signed by it. Returns `(root_der, issuer_der)`.
-fn decode_and_validate_issuer_chain(chain: &str) -> Result<(Vec<u8>, Vec<u8>)> {
+pub(crate) fn decode_and_validate_issuer_chain(chain: &str) -> Result<(Vec<u8>, Vec<u8>)> {
     let decoded_chain = urlencoding::decode(chain).context("Failed to decode certificate chain")?;
 
     let mut chain_der: Vec<Vec<u8>> = Pem::iter_from_buffer(decoded_chain.as_bytes())
@@ -547,7 +577,7 @@ fn decode_and_validate_issuer_chain(chain: &str) -> Result<(Vec<u8>, Vec<u8>)> {
 }
 
 /// Decodes a hex string of exactly `2 * N` characters into `N` bytes.
-fn decode_hex<const N: usize>(s: &str) -> Result<[u8; N]> {
+pub(crate) fn decode_hex<const N: usize>(s: &str) -> Result<[u8; N]> {
     anyhow::ensure!(
         s.len() == 2 * N && s.bytes().all(|b| b.is_ascii_hexdigit()),
         "expected a {}-character hex string",
@@ -715,7 +745,7 @@ fn verify_tcb_info_signature(
 /// Verifies TCB Info returned by Intel PCS: the `TCB-Info-Issuer-Chain` must be a valid
 /// Root CA -> TCB Signing chain rooted at the same Root CA as the PCK certificate issuer chain,
 /// and the TCB Info signature must verify against the TCB Signing certificate.
-fn verify_tcb_info(
+pub(crate) fn verify_tcb_info(
     tcb_info_json: &str,
     tcb_issuer_chain: &str,
     pck_issuer_chain: &str,
